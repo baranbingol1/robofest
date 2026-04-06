@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -13,7 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = ROOT.parent.parent
-WEBOTS_REPO = WORKSPACE_ROOT / "webots-docs"
+WEBOTS_REPO = Path(os.environ.get("WEBOTS_DOCS_DIR", WORKSPACE_ROOT / "webots-docs"))
+WEBOTS_UPSTREAM_REF = os.environ.get("WEBOTS_REF", "master")
+GITHUB_API_BASE = "https://api.github.com/repos/cyberbotics/webots"
+RAW_BASE = "https://raw.githubusercontent.com/cyberbotics/webots"
 OUTPUT = ROOT / "webots-python-llms-full.txt"
 
 GUIDE_FILES = [
@@ -88,16 +92,42 @@ DIRECTIVE_PREFIXES = (
 LANGUAGE_TABS = {"C", "C++", "Python", "Java", "MATLAB"}
 
 
-def run_git(*args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(WEBOTS_REPO), *args],
-        text=True,
-        stderr=subprocess.DEVNULL,
+def fetch_url(url: str) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "robofest-webots-llms-full-generator",
+        },
     )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def local_repo_commit() -> str | None:
+    head = WEBOTS_REPO / ".git" / "HEAD"
+    if not head.exists():
+        return None
+
+    head_value = head.read_text(encoding="utf-8").strip()
+    if head_value.startswith("ref: "):
+        ref_path = WEBOTS_REPO / ".git" / head_value.split(" ", 1)[1]
+        if ref_path.exists():
+            return ref_path.read_text(encoding="utf-8").strip()
+        return None
+    return head_value or None
+
+
+def remote_repo_commit() -> str:
+    payload = json.loads(fetch_url(f"{GITHUB_API_BASE}/commits/{WEBOTS_UPSTREAM_REF}").decode("utf-8"))
+    sha = payload.get("sha")
+    if not sha:
+        raise RuntimeError(f"Unable to resolve upstream commit for ref {WEBOTS_UPSTREAM_REF!r}")
+    return sha
 
 
 def repo_commit() -> str:
-    return run_git("rev-parse", "HEAD").strip()
+    return local_repo_commit() or remote_repo_commit()
 
 
 def fetch_doc(path: str, commit: str) -> str:
@@ -105,9 +135,8 @@ def fetch_doc(path: str, commit: str) -> str:
     if local_path.exists():
         return local_path.read_text(encoding="utf-8")
 
-    url = f"https://raw.githubusercontent.com/cyberbotics/webots/{commit}/{path}"
-    with urllib.request.urlopen(url, timeout=30) as response:
-        return response.read().decode("utf-8")
+    url = f"{RAW_BASE}/{commit}/{path}"
+    return fetch_url(url).decode("utf-8")
 
 
 def collapse_blank_lines(text: str) -> str:
@@ -167,18 +196,19 @@ def build_header(commit: str) -> str:
 
 
 def main() -> int:
-    if not WEBOTS_REPO.exists():
-        print(f"Missing Webots repo at {WEBOTS_REPO}", file=sys.stderr)
+    try:
+        commit = repo_commit()
+    except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        print(f"Unable to resolve Webots upstream docs source: {exc}", file=sys.stderr)
         return 1
 
-    commit = repo_commit()
     sections = [build_header(commit)]
     failures: list[str] = []
 
     for path in ALL_FILES:
         try:
             raw = fetch_doc(path, commit)
-        except (subprocess.CalledProcessError, urllib.error.URLError) as exc:
+        except (OSError, urllib.error.URLError) as exc:
             failures.append(f"{path}: {exc}")
             continue
 
