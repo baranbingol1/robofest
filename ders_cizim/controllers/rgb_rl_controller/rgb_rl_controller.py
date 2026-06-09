@@ -1,0 +1,858 @@
+"""RGB camera Q-learning controller for the ders_cizim MonsterBorg world."""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+try:
+    from .control_core import (
+        ACTION_NAMES,
+        ACTION_TURNS,
+        TARGET_COLORS,
+        action_to_speeds,
+        clamp,
+        compute_reward,
+        heuristic_action,
+        parse_target_search_actions,
+        target_search_action,
+    )
+    from .robot_config import DEFAULT_SAFETY_LIMITS, camera_pose_from_env, env_float, env_int, safety_limits_from_env
+    from .mission import (
+        DEFAULT_START_ROTATION,
+        DEFAULT_START_TRANSLATION,
+        StartPose,
+        evaluate_terminal_reason,
+        mission_config_from_env,
+        randomized_start_pose,
+    )
+    from .sim_metrics import summarize_records
+except ImportError:  # Webots executes controllers from their own directory.
+    from control_core import (
+        ACTION_NAMES,
+        ACTION_TURNS,
+        TARGET_COLORS,
+        action_to_speeds,
+        clamp,
+        compute_reward,
+        heuristic_action,
+        parse_target_search_actions,
+        target_search_action,
+    )
+    from robot_config import DEFAULT_SAFETY_LIMITS, camera_pose_from_env, env_float, env_int, safety_limits_from_env
+    from mission import (
+        DEFAULT_START_ROTATION,
+        DEFAULT_START_TRANSLATION,
+        StartPose,
+        evaluate_terminal_reason,
+        mission_config_from_env,
+        randomized_start_pose,
+    )
+    from sim_metrics import summarize_records
+
+TIME_STEP_FALLBACK = 32
+SAFETY_LIMITS = DEFAULT_SAFETY_LIMITS
+MAX_SPEED = SAFETY_LIMITS.webots_max_speed
+BASE_SPEED = SAFETY_LIMITS.webots_base_speed
+LEFT_SPEED_SCALE = 1.0
+RIGHT_SPEED_SCALE = 1.0
+
+COMMON_START_TRANSLATION = list(DEFAULT_START_TRANSLATION)
+COMMON_START_ROTATION = list(DEFAULT_START_ROTATION)
+
+COLOR_CODES = {
+    "none": 0,
+    "black": 1,
+    "red": 2,
+    "green": 3,
+    "blue": 4,
+    "mixed": 5,
+}
+
+
+@dataclass(slots=True)
+class RgbProfile:
+    visible: bool
+    center_error: float
+    confidence: float
+    color_name: str
+    target_color: str
+    matched_target: bool
+    line_width_ratio: float
+    rgb_balance: tuple[float, float, float]
+    threshold: float
+
+
+def q_table_path() -> Path:
+    configured = os.getenv("MONSTERBORG_RL_Q_TABLE")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "artifacts" / "rgb_rl" / "q_table.json"
+
+
+def read_pixel(camera_api, image: object, width: int, x: int, y: int) -> tuple[int, int, int]:
+    return (
+        int(camera_api.imageGetRed(image, width, x, y)),
+        int(camera_api.imageGetGreen(image, width, x, y)),
+        int(camera_api.imageGetBlue(image, width, x, y)),
+    )
+
+
+def normalize_target_color(value: str | None, *, train_mode: bool) -> str:
+    default = "random" if train_mode else "red"
+    requested = (value or default).strip().lower()
+    if requested == "random":
+        return random.choice(TARGET_COLORS)
+    if requested in TARGET_COLORS:
+        return requested
+    return "red"
+
+
+def detect_color_name(rgb_balance: tuple[float, float, float]) -> str:
+    red, green, blue = rgb_balance
+    luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+    channels = {"red": red, "green": green, "blue": blue}
+    strongest_name = max(channels, key=channels.get)
+    strongest = channels[strongest_name]
+    others = [value for name, value in channels.items() if name != strongest_name]
+    saturation = strongest - min(channels.values())
+    color_margin = strongest - max(others)
+    relative_color = strongest >= 34 and color_margin >= 16 and strongest / max(max(others), 1.0) >= 1.8
+    bright_color = strongest >= 105 and saturation >= 42 and color_margin >= 28
+    if bright_color or relative_color:
+        return strongest_name
+    if luminance < 135 and saturation < 65:
+        return "black"
+    return "mixed"
+
+
+def pixel_score(red: int, green: int, blue: int) -> float:
+    luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+    saturation = max(red, green, blue) - min(red, green, blue)
+    darkness = 255.0 - luminance
+    return max(darkness, saturation * 1.05)
+
+
+def segment_rows(
+    samples_by_row: list[list[tuple[int, float, str, int, int, int]]],
+    width: int,
+    target_color: str,
+    previous_error: float,
+    *,
+    prefer_target: bool,
+) -> tuple[list[tuple[float, float, float, str, int, int, int, int]], bool]:
+    expected_x = width / 2.0 + clamp(previous_error, -1.0, 1.0) * (width / 2.0)
+    selected: list[tuple[float, float, float, str, int, int, int, int]] = []
+    matched_target = False
+
+    for row_index, row_samples in enumerate(samples_by_row):
+        if prefer_target:
+            candidates = [sample for sample in row_samples if sample[2] == target_color]
+        else:
+            candidates = [
+                sample
+                for sample in row_samples
+                if sample[2] in {"black", target_color, "mixed", "red", "green", "blue"}
+            ]
+        if not candidates:
+            continue
+
+        segments: list[list[tuple[int, float, str, int, int, int]]] = []
+        current: list[tuple[int, float, str, int, int, int]] = []
+        previous_x: int | None = None
+        for sample in candidates:
+            x = sample[0]
+            if previous_x is None or x <= previous_x + 1:
+                current.append(sample)
+            else:
+                if current:
+                    segments.append(current)
+                current = [sample]
+            previous_x = x
+        if current:
+            segments.append(current)
+
+        for segment in segments:
+            if len(segment) < 2:
+                continue
+            weight_sum = sum(sample[1] for sample in segment)
+            center = sum(sample[0] * sample[1] for sample in segment) / max(weight_sum, 1e-6)
+            avg_red = sum(sample[3] * sample[1] for sample in segment) / max(weight_sum, 1e-6)
+            avg_green = sum(sample[4] * sample[1] for sample in segment) / max(weight_sum, 1e-6)
+            avg_blue = sum(sample[5] * sample[1] for sample in segment) / max(weight_sum, 1e-6)
+            color_name = detect_color_name((avg_red, avg_green, avg_blue))
+            if prefer_target:
+                color_priority = 1.7 if color_name == target_color else 0.0
+            else:
+                color_priority = 1.0
+            distance_penalty = abs(center - expected_x) / max(width / 2.0, 1.0)
+            row_position = row_index / max(len(samples_by_row) - 1, 1)
+            row_weight = 0.75 + 0.35 * row_position
+            quality = color_priority * row_weight * weight_sum / max(len(segment), 1) - distance_penalty * 22.0
+            selected.append((quality, center, weight_sum, color_name, len(segment), avg_red, avg_green, avg_blue))
+            matched_target = matched_target or color_name == target_color
+
+    selected.sort(key=lambda item: item[0], reverse=True)
+    return selected[:8], matched_target
+
+
+def analyze_rgb_camera(
+    camera,
+    camera_api,
+    target_color: str,
+    previous_error: float,
+    *,
+    allow_common: bool = True,
+    allow_target: bool = True,
+) -> RgbProfile:
+    width = int(camera.getWidth())
+    height = int(camera.getHeight())
+    image = camera.getImage()
+    if image is None or width <= 0 or height <= 0:
+        return RgbProfile(False, 0.0, 0.0, "none", target_color, False, 0.0, (0.0, 0.0, 0.0), 0.0)
+
+    raw_scores: list[float] = []
+    raw_pixels: list[tuple[int, int, int, int, int, float, str]] = []
+    scan_limit_y = max(1, int(height * 0.74))
+    row_step = max(1, scan_limit_y // 20)
+    x_step = 1
+    for y in range(0, scan_limit_y, row_step):
+        for x in range(0, width, x_step):
+            red, green, blue = read_pixel(camera_api, image, width, x, y)
+            score = pixel_score(red, green, blue)
+            color_name = detect_color_name((red, green, blue))
+            raw_scores.append(score)
+            raw_pixels.append((x, y, red, green, blue, score, color_name))
+
+    if not raw_scores:
+        return RgbProfile(False, 0.0, 0.0, "none", target_color, False, 0.0, (0.0, 0.0, 0.0), 0.0)
+
+    mean_score = sum(raw_scores) / len(raw_scores)
+    variance = sum((value - mean_score) ** 2 for value in raw_scores) / max(len(raw_scores), 1)
+    deviation = math.sqrt(variance)
+    threshold = max(24.0, mean_score + deviation * 0.25)
+
+    rows: dict[int, list[tuple[int, float, str, int, int, int]]] = {}
+    for x, y, red, green, blue, score, color_name in raw_pixels:
+        if color_name == "none":
+            continue
+        if score <= threshold and color_name not in TARGET_COLORS:
+            continue
+        rows.setdefault(y, []).append((x, max(1.0, score - threshold), color_name, red, green, blue))
+
+    samples_by_row = [rows[y] for y in sorted(rows)]
+    if not samples_by_row:
+        return RgbProfile(False, 0.0, 0.0, "none", target_color, False, 0.0, (0.0, 0.0, 0.0), threshold)
+
+    target_segments, matched_target = segment_rows(
+        samples_by_row,
+        width,
+        target_color,
+        previous_error,
+        prefer_target=True,
+    )
+    fallback_segments, _ = segment_rows(
+        samples_by_row,
+        width,
+        target_color,
+        previous_error,
+        prefer_target=False,
+    )
+    if matched_target and target_segments and allow_target:
+        selected = target_segments
+        source_matched_target = True
+        if allow_common and fallback_segments:
+            best_fallback = fallback_segments[0]
+            fallback_error = (best_fallback[1] - width / 2.0) / max(width / 2.0, 1.0)
+            if best_fallback[3] == "black" and abs(fallback_error) < 0.42:
+                selected = fallback_segments
+                source_matched_target = False
+    elif not allow_common:
+        return RgbProfile(
+            False,
+            previous_error,
+            0.0,
+            "none",
+            target_color,
+            False,
+            0.0,
+            (0.0, 0.0, 0.0),
+            threshold,
+        )
+    else:
+        selected = fallback_segments
+        source_matched_target = False
+
+    if not selected:
+        return RgbProfile(False, 0.0, 0.0, "none", target_color, False, 0.0, (0.0, 0.0, 0.0), threshold)
+
+    quality_floor = max(selected[0][0] * 0.35, -1000.0)
+    selected = [segment for segment in selected if segment[0] >= quality_floor]
+    weight_sum = sum(max(1.0, segment[2]) for segment in selected)
+    center_index = sum(segment[1] * max(1.0, segment[2]) for segment in selected) / max(weight_sum, 1e-6)
+    center_error = (center_index - width / 2.0) / max(width / 2.0, 1.0)
+    avg_red = sum(segment[5] * max(1.0, segment[2]) for segment in selected) / max(weight_sum, 1e-6)
+    avg_green = sum(segment[6] * max(1.0, segment[2]) for segment in selected) / max(weight_sum, 1e-6)
+    avg_blue = sum(segment[7] * max(1.0, segment[2]) for segment in selected) / max(weight_sum, 1e-6)
+    color_name = detect_color_name((avg_red, avg_green, avg_blue))
+    line_width_ratio = sum(segment[4] for segment in selected) / max(width * len(samples_by_row), 1)
+    confidence = clamp(line_width_ratio * 14.0 + min(1.0, weight_sum / 1200.0), 0.0, 1.0)
+    visible = confidence >= 0.10
+
+    return RgbProfile(
+        visible=visible,
+        center_error=clamp(center_error, -1.0, 1.0),
+        confidence=confidence,
+        color_name=color_name if visible else "none",
+        target_color=target_color,
+        matched_target=source_matched_target,
+        line_width_ratio=line_width_ratio,
+        rgb_balance=(avg_red, avg_green, avg_blue),
+        threshold=threshold,
+    )
+
+
+def quantize_error(center_error: float) -> int:
+    return max(-4, min(4, int(round(center_error * 4.0))))
+
+
+def quantize_confidence(confidence: float) -> int:
+    if confidence < 0.22:
+        return 0
+    if confidence < 0.55:
+        return 1
+    return 2
+
+
+def quantize_width(width_ratio: float) -> int:
+    if width_ratio < 0.035:
+        return 0
+    if width_ratio < 0.11:
+        return 1
+    return 2
+
+
+def state_key(profile: RgbProfile, previous_error: float) -> str:
+    if not profile.visible:
+        return f"lost|target{COLOR_CODES.get(profile.target_color, 0)}"
+    trend = profile.center_error - previous_error
+    if trend > 0.12:
+        trend_bin = 1
+    elif trend < -0.12:
+        trend_bin = -1
+    else:
+        trend_bin = 0
+    color_code = COLOR_CODES.get(profile.color_name, COLOR_CODES["mixed"])
+    target_code = COLOR_CODES.get(profile.target_color, COLOR_CODES["none"])
+    matched_code = 1 if profile.matched_target else 0
+    return (
+        f"e{quantize_error(profile.center_error)}"
+        f"|c{quantize_confidence(profile.confidence)}"
+        f"|w{quantize_width(profile.line_width_ratio)}"
+        f"|rgb{color_code}"
+        f"|target{target_code}"
+        f"|match{matched_code}"
+        f"|t{trend_bin}"
+    )
+
+
+class QPolicy:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.table: dict[str, list[float]] = {}
+        self.training_steps = 0
+        self.episodes = 0
+
+    def load(self) -> None:
+        if not self.path.exists():
+            return
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.table = {
+            str(key): [float(value) for value in values]
+            for key, values in data.get("q_table", {}).items()
+        }
+        self.training_steps = int(data.get("training_steps", 0))
+        self.episodes = int(data.get("episodes", 0))
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "format": "monsterborg-rgb-tabular-q-v1",
+            "training_steps": self.training_steps,
+            "episodes": self.episodes,
+            "actions": [
+                {"index": index, "name": name, "turn": ACTION_TURNS[index]}
+                for index, name in enumerate(ACTION_NAMES)
+            ],
+            "q_table": self.table,
+        }
+        self.path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+    def values_for(self, key: str) -> list[float]:
+        if key not in self.table:
+            self.table[key] = [0.0 for _ in ACTION_TURNS]
+        return self.table[key]
+
+    def best_action(self, key: str, profile: RgbProfile) -> int:
+        values = self.values_for(key)
+        if max(values) == min(values) == 0.0:
+            return heuristic_action(profile)
+        best_value = max(values)
+        best_indexes = [index for index, value in enumerate(values) if value == best_value]
+        return random.choice(best_indexes)
+
+    def choose_action(self, key: str, profile: RgbProfile, epsilon: float) -> int:
+        if random.random() < epsilon:
+            return random.randrange(len(ACTION_TURNS))
+        return self.best_action(key, profile)
+
+    def update(self, key: str, action_index: int, reward: float, next_key: str, alpha: float, gamma: float) -> None:
+        values = self.values_for(key)
+        next_values = self.values_for(next_key)
+        old_value = values[action_index]
+        values[action_index] = old_value + alpha * (reward + gamma * max(next_values) - old_value)
+
+
+def set_left_right_speed(left_motors, right_motors, left_speed: float, right_speed: float) -> tuple[float, float]:
+    left_speed = clamp(left_speed * LEFT_SPEED_SCALE, -MAX_SPEED, MAX_SPEED)
+    right_speed = clamp(right_speed * RIGHT_SPEED_SCALE, -MAX_SPEED, MAX_SPEED)
+    for motor in left_motors:
+        motor.setVelocity(left_speed)
+    for motor in right_motors:
+        motor.setVelocity(right_speed)
+    return left_speed, right_speed
+
+
+def save_camera_ppm(camera, camera_api, path: Path) -> None:
+    width = int(camera.getWidth())
+    height = int(camera.getHeight())
+    image = camera.getImage()
+    if image is None or width <= 0 or height <= 0:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="ascii") as handle:
+        handle.write(f"P3\n{width} {height}\n255\n")
+        for y in range(height):
+            values: list[str] = []
+            for x in range(width):
+                red, green, blue = read_pixel(camera_api, image, width, x, y)
+                values.extend((str(red), str(green), str(blue)))
+            handle.write(" ".join(values))
+            handle.write("\n")
+
+
+def reset_robot_if_possible(
+    robot,
+    self_node,
+    translation_field,
+    rotation_field,
+    start_pose: StartPose | None = None,
+) -> None:
+    if self_node is None or translation_field is None or rotation_field is None:
+        return
+    pose = start_pose or StartPose(tuple(COMMON_START_TRANSLATION), tuple(COMMON_START_ROTATION))
+    translation_field.setSFVec3f(list(pose.translation))
+    rotation_field.setSFRotation(list(pose.rotation))
+    try:
+        robot.simulationResetPhysics()
+    except Exception:
+        pass
+
+
+def apply_camera_pose_override(robot) -> dict[str, object]:
+    pose = camera_pose_from_env()
+    camera_noise = os.getenv("MONSTERBORG_CAMERA_NOISE")
+    if not hasattr(robot, "getFromDef"):
+        return {"translation": pose.translation, "rotation": pose.rotation, "noise": camera_noise}
+    try:
+        camera_node = robot.getFromDef("RGB_CAMERA")
+        if camera_node is None:
+            return {"translation": pose.translation, "rotation": pose.rotation, "noise": camera_noise}
+        translation_field = camera_node.getField("translation")
+        rotation_field = camera_node.getField("rotation")
+        if translation_field is not None:
+            translation_field.setSFVec3f(list(pose.translation))
+        if rotation_field is not None:
+            rotation_field.setSFRotation(list(pose.rotation))
+        if camera_noise is not None:
+            noise_field = camera_node.getField("noise")
+            if noise_field is not None:
+                noise_field.setSFFloat(max(0.0, float(camera_noise)))
+    except Exception:
+        pass
+    return {"translation": pose.translation, "rotation": pose.rotation, "noise": camera_noise}
+
+
+def make_start_pose(rng: random.Random) -> StartPose:
+    return randomized_start_pose(
+        rng,
+        lateral_jitter=env_float("MONSTERBORG_RL_START_LATERAL_JITTER", 0.0),
+        longitudinal_jitter=env_float("MONSTERBORG_RL_START_LONGITUDINAL_JITTER", 0.0),
+        heading_jitter=env_float("MONSTERBORG_RL_START_HEADING_JITTER", 0.0),
+    )
+
+
+def write_run_outputs(
+    *,
+    step_log_path: str | None,
+    summary_path: str | None,
+    step_records: list[dict[str, object]],
+) -> None:
+    if step_log_path:
+        Path(step_log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(step_log_path).write_text(
+            json.dumps(step_records, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if summary_path:
+        summary = summarize_records(step_records)
+        Path(summary_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(summary_path).write_text(
+            json.dumps(asdict(summary), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+
+def should_search_for_target_branch(
+    profile: RgbProfile,
+    *,
+    target_seen: bool,
+    target_handoff_open: bool,
+    current_translation: list[float] | None,
+    min_x: float,
+) -> bool:
+    if target_seen or not target_handoff_open or profile.matched_target:
+        return False
+    if current_translation is not None and float(current_translation[0]) < min_x:
+        return False
+    return profile.target_color in TARGET_COLORS
+
+
+def main() -> None:
+    global SAFETY_LIMITS, MAX_SPEED, BASE_SPEED, LEFT_SPEED_SCALE, RIGHT_SPEED_SCALE
+
+    try:
+        from controller import Camera, Supervisor
+    except ImportError:
+        from controller import Camera, Robot as Supervisor
+
+    seed = env_int("MONSTERBORG_RL_SEED", 7)
+    random.seed(seed)
+    start_rng = random.Random(env_int("MONSTERBORG_RL_START_SEED", seed))
+    SAFETY_LIMITS = safety_limits_from_env()
+    MAX_SPEED = SAFETY_LIMITS.webots_max_speed
+    BASE_SPEED = SAFETY_LIMITS.webots_base_speed
+    LEFT_SPEED_SCALE = max(0.0, env_float("MONSTERBORG_RL_LEFT_SPEED_SCALE", 1.0))
+    RIGHT_SPEED_SCALE = max(0.0, env_float("MONSTERBORG_RL_RIGHT_SPEED_SCALE", 1.0))
+    mission_config = mission_config_from_env(os.environ)
+
+    mode = os.getenv("MONSTERBORG_RL_MODE", "run").strip().lower()
+    train_mode = mode == "train"
+    max_train_steps = env_int("MONSTERBORG_RL_TRAIN_STEPS", 60000)
+    save_interval = max(100, env_int("MONSTERBORG_RL_SAVE_INTERVAL", 1000))
+    alpha = env_float("MONSTERBORG_RL_ALPHA", 0.18)
+    gamma = env_float("MONSTERBORG_RL_GAMMA", 0.92)
+    epsilon_start = env_float("MONSTERBORG_RL_EPSILON_START", 0.35)
+    epsilon_end = env_float("MONSTERBORG_RL_EPSILON_END", 0.04)
+    episode_steps_limit = env_int("MONSTERBORG_RL_EPISODE_STEPS", 850)
+    lost_reset_steps = env_int("MONSTERBORG_RL_LOST_RESET_STEPS", 18)
+    target_lock_min_x = env_float("MONSTERBORG_RL_TARGET_LOCK_MIN_X", 0.04)
+    target_lock_min_step = env_int("MONSTERBORG_RL_TARGET_LOCK_MIN_STEP", 0)
+    branch_search_min_x = env_float("MONSTERBORG_RL_BRANCH_SEARCH_MIN_X", 0.30)
+    target_search_actions = parse_target_search_actions(os.getenv("MONSTERBORG_RL_TARGET_SEARCH_ACTIONS"))
+
+    robot = Supervisor()
+    timestep = int(robot.getBasicTimeStep()) or TIME_STEP_FALLBACK
+    camera_pose = apply_camera_pose_override(robot)
+
+    motor_rl = robot.getDevice("motor_rl")
+    motor_fl = robot.getDevice("motor_fl")
+    motor_rr = robot.getDevice("motor_rr")
+    motor_fr = robot.getDevice("motor_fr")
+    left_motors = [motor_rl, motor_fl]
+    right_motors = [motor_rr, motor_fr]
+    for motor in left_motors + right_motors:
+        motor.setPosition(float("inf"))
+        motor.setVelocity(0.0)
+
+    camera = robot.getDevice("camera")
+    camera.enable(timestep)
+
+    self_node = None
+    translation_field = None
+    rotation_field = None
+    if hasattr(robot, "getSelf"):
+        try:
+            self_node = robot.getSelf()
+            translation_field = self_node.getField("translation") if self_node else None
+            rotation_field = self_node.getField("rotation") if self_node else None
+        except Exception:
+            self_node = None
+
+    policy = QPolicy(q_table_path())
+    policy.load()
+
+    previous_key: str | None = None
+    previous_action: int | None = None
+    previous_error = 0.0
+    target_seen = False
+    target_lock_candidates = 0
+    episode_step = 0
+    lost_steps = 0
+    captured_debug_frame = False
+    capture_path = os.getenv("MONSTERBORG_RL_CAPTURE_PATH")
+    capture_step = env_int("MONSTERBORG_RL_CAPTURE_STEP", 1)
+    quit_after_capture = os.getenv("MONSTERBORG_RL_QUIT_AFTER_CAPTURE", "0") == "1"
+    max_run_steps = env_int("MONSTERBORG_RL_MAX_STEPS", 0)
+    step_log_path = os.getenv("MONSTERBORG_RL_STEP_LOG_PATH")
+    summary_path = os.getenv("MONSTERBORG_RL_SUMMARY_PATH")
+    step_records: list[dict[str, object]] = []
+
+    print(
+        "rgb_rl_controller",
+        f"mode={mode}",
+        f"q_table={policy.path}",
+        f"loaded_states={len(policy.table)}",
+        flush=True,
+    )
+
+    target_color = normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
+    start_pose = make_start_pose(start_rng)
+    print(f"target_color={target_color}", flush=True)
+    print(
+        "mission",
+        f"goal={mission_config.zones[target_color].center if target_color in mission_config.zones else 'none'}",
+        f"radius={mission_config.zones[target_color].radius if target_color in mission_config.zones else 'none'}",
+        f"start={start_pose.translation}",
+        flush=True,
+    )
+    reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
+
+    while robot.step(timestep) != -1:
+        current_translation = translation_field.getSFVec3f() if translation_field is not None else None
+        position_gate_open = (
+            True if current_translation is None else float(current_translation[0]) >= target_lock_min_x
+        )
+        step_gate_open = episode_step + 1 >= target_lock_min_step
+        target_handoff_open = target_seen or (position_gate_open and step_gate_open)
+        profile = analyze_rgb_camera(
+            camera,
+            Camera,
+            target_color,
+            previous_error,
+            allow_common=not target_seen,
+            allow_target=target_handoff_open,
+        )
+        target_lock_candidate = (
+            target_handoff_open
+            and
+            profile.matched_target
+            and profile.confidence >= 0.24
+            and abs(profile.center_error) <= 0.85
+        )
+        if target_lock_candidate:
+            target_lock_candidates += 1
+        else:
+            target_lock_candidates = 0
+        if target_lock_candidates >= 2:
+            target_seen = True
+        should_capture = (
+            bool(capture_path)
+            and not captured_debug_frame
+            and (capture_step <= 1 or episode_step + 1 >= capture_step)
+        )
+        if should_capture:
+            save_camera_ppm(camera, Camera, Path(capture_path))
+            debug_path = Path(capture_path).with_suffix(".json")
+            debug_path.write_text(
+                json.dumps(
+                    {
+                        "target_color": target_color,
+                        "visible": profile.visible,
+                        "center_error": profile.center_error,
+                        "confidence": profile.confidence,
+                        "color_name": profile.color_name,
+                        "matched_target": profile.matched_target,
+                        "line_width_ratio": profile.line_width_ratio,
+                        "rgb_balance": list(profile.rgb_balance),
+                        "threshold": profile.threshold,
+                        "camera_pose": {
+                            "translation": list(camera_pose["translation"]),
+                            "rotation": list(camera_pose["rotation"]),
+                        },
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            captured_debug_frame = True
+            if quit_after_capture:
+                if hasattr(robot, "simulationQuit"):
+                    robot.simulationQuit(0)
+                break
+        key = state_key(profile, previous_error)
+        episode_step += 1
+        policy.training_steps += 1 if train_mode else 0
+        lost_steps = 0 if profile.visible else lost_steps + 1
+
+        if train_mode and previous_key is not None and previous_action is not None:
+            reward = compute_reward(profile, previous_action)
+            policy.update(previous_key, previous_action, reward, key, alpha, gamma)
+
+        if train_mode:
+            progress = min(1.0, policy.training_steps / max(max_train_steps, 1))
+            epsilon = epsilon_start + (epsilon_end - epsilon_start) * progress
+        else:
+            epsilon = env_float("MONSTERBORG_RL_EPSILON", 0.0)
+
+        terminal_reason = evaluate_terminal_reason(
+            target_color=target_color,
+            translation=current_translation,
+            target_seen=target_seen,
+            lost_steps=lost_steps,
+            lost_reset_steps=lost_reset_steps,
+            episode_step=episode_step,
+            max_steps=episode_steps_limit if train_mode else max_run_steps,
+            config=mission_config,
+        )
+        record_target_color = target_color
+        record_start_pose = start_pose
+
+        if terminal_reason is not None:
+            action = ACTION_NAMES.index("straight")
+            action_name = "stop"
+            left_speed = 0.0
+            right_speed = 0.0
+            left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
+        else:
+            if target_color in target_search_actions and should_search_for_target_branch(
+                profile,
+                target_seen=target_seen,
+                target_handoff_open=target_handoff_open,
+                current_translation=current_translation,
+                min_x=branch_search_min_x,
+            ):
+                action = target_search_action(target_color, target_search_actions)
+            else:
+                action = policy.choose_action(key, profile, epsilon)
+            action_name = ACTION_NAMES[action]
+            left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
+            left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
+
+        if policy.training_steps % 100 == 0:
+            print(
+                f"step={policy.training_steps if train_mode else episode_step}",
+                f"episode={policy.episodes}",
+                f"state={key}",
+                f"action={action_name}",
+                f"error={profile.center_error:.3f}",
+                f"confidence={profile.confidence:.3f}",
+                f"color={profile.color_name}",
+                f"target={target_color}",
+                f"match={int(profile.matched_target)}",
+                f"locked={int(target_seen)}",
+                f"lock_candidates={target_lock_candidates}",
+                f"handoff={int(target_handoff_open)}",
+                f"terminal={terminal_reason or 'none'}",
+                f"epsilon={epsilon:.3f}",
+                flush=True,
+            )
+
+        reset_episode = train_mode and terminal_reason is not None
+        if reset_episode:
+            policy.episodes += 1
+            episode_step = 0
+            lost_steps = 0
+            previous_key = None
+            previous_action = None
+            previous_error = 0.0
+            target_seen = False
+            target_lock_candidates = 0
+            target_color = normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
+            start_pose = make_start_pose(start_rng)
+            set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
+            reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
+        else:
+            previous_key = key
+            previous_action = action
+            previous_error = profile.center_error
+
+        if train_mode and policy.training_steps % save_interval == 0:
+            policy.save()
+
+        if step_log_path:
+            step_records.append(
+                {
+                    "step": policy.training_steps if train_mode else episode_step,
+                    "target_color": record_target_color,
+                    "visible": profile.visible,
+                    "center_error": profile.center_error,
+                    "confidence": profile.confidence,
+                    "color_name": profile.color_name,
+                    "matched_target": profile.matched_target,
+                    "line_width_ratio": profile.line_width_ratio,
+                    "rgb_balance": list(profile.rgb_balance),
+                    "threshold": profile.threshold,
+                    "target_seen": target_seen,
+                    "target_lock_candidate": target_lock_candidate,
+                    "target_lock_candidates": target_lock_candidates,
+                    "target_handoff_open": target_handoff_open,
+                    "action": action_name,
+                    "left_speed": left_speed,
+                    "right_speed": right_speed,
+                    "left_speed_scale": LEFT_SPEED_SCALE,
+                    "right_speed_scale": RIGHT_SPEED_SCALE,
+                    "translation": current_translation,
+                    "terminal_reason": terminal_reason,
+                    "reached_goal": terminal_reason == "reached_goal",
+                    "goal_center": (
+                        list(mission_config.zones[record_target_color].center)
+                        if record_target_color in mission_config.zones
+                        else None
+                    ),
+                    "goal_radius": (
+                        mission_config.zones[record_target_color].radius
+                        if record_target_color in mission_config.zones
+                        else None
+                    ),
+                    "goal_reach_clearance": mission_config.goal_reach_clearance,
+                    "goal_effective_radius": (
+                        max(
+                            0.0,
+                            mission_config.zones[record_target_color].radius
+                            - mission_config.goal_reach_clearance,
+                        )
+                        if record_target_color in mission_config.zones
+                        else None
+                    ),
+                    "start_translation": list(record_start_pose.translation),
+                    "start_rotation": list(record_start_pose.rotation),
+                    "start_lateral_offset": record_start_pose.lateral_offset,
+                    "start_heading_offset": record_start_pose.heading_offset,
+                }
+            )
+
+        reached_train_limit = train_mode and policy.training_steps >= max_train_steps
+        reached_run_limit = (not train_mode) and terminal_reason is not None
+        if reached_train_limit or reached_run_limit:
+            set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
+            if train_mode:
+                policy.save()
+                print(f"training_complete q_table={policy.path}", flush=True)
+            write_run_outputs(
+                step_log_path=step_log_path,
+                summary_path=summary_path,
+                step_records=step_records,
+            )
+            if hasattr(robot, "simulationQuit") and (mission_config.quit_on_done or step_log_path or summary_path):
+                robot.simulationQuit(0)
+            break
+
+
+if __name__ == "__main__":
+    main()

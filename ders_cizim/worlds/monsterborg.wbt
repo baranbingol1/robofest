@@ -1,0 +1,327 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation -0.22408822828932803 -0.012260293383070832 0.9744917399076869 3.248136999938419
+  position 0.6632744299714677 -0.6737666762212231 0.40841341307924844
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  floorSize 2 2
+}
+Solid {
+  translation 0 0 0.001
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 1 1
+        }
+        texture ImageTexture {
+          url [
+            "textures/abstract_racetrack_in_black_and_white.png"
+          ]
+        }
+      }
+      geometry Box {
+        size 2 2 0.001
+      }
+    }
+  ]
+}
+Robot {
+  translation 0.00447391 -0.700741 0.0993865
+  rotation 0.007308191135707109 0.9999732948135465 -1.43672787700961e-06 3.1412758139848846
+  children [
+    Camera {
+      translation -0.085 0 0.05
+      rotation 0 1 0 -1.5707953071795862
+      children [
+        Solid {
+          children [
+            Shape {
+              appearance Appearance {
+                material Material {
+                }
+              }
+              geometry Box {
+                size 0.01 0.01 0.01
+              }
+            }
+          ]
+          boundingObject Shape {
+            geometry Box {
+              size 0.01 0.01 0.01
+            }
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.08 0 0.04
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.7 0.7 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.001 0.03 0.03
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.055 0.04 0.05
+      rotation 1 0 0 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.3 0.3 0.3
+            metalness 0.5
+          }
+          geometry Cylinder {
+            height 0.057
+            radius 0.02
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.055 0.04 0.05
+      rotation 1 0 0 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.3 0.3 0.3
+            metalness 0.5
+          }
+          geometry Cylinder {
+            height 0.057
+            radius 0.02
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.055 -0.04 0.05
+      rotation 1 0 0 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.3 0.3 0.3
+            metalness 0.5
+          }
+          geometry Cylinder {
+            height 0.057
+            radius 0.02
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.055 -0.04 0.05
+      rotation 1 0 0 1.5708
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.3 0.3 0.3
+            metalness 0.5
+          }
+          geometry Cylinder {
+            height 0.057
+            radius 0.02
+          }
+        }
+      ]
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        position 0.025599612070388533
+        axis 0 1 0
+        anchor -0.055 -0.095 0.05
+      }
+      device [
+        PositionSensor {
+          name "ps_rl"
+        }
+        RotationalMotor {
+          name "motor_rl"
+        }
+      ]
+      endPoint Solid {
+        translation -0.05500026760586995 -0.095 0.04998954894029675
+        rotation -0.5678043028481945 0.5820646410712117 0.5820644528587169 2.1087793811487963
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0 0 0
+              metalness 0.1
+            }
+            geometry Cylinder {
+              height 0.05
+              radius 0.05
+            }
+          }
+        ]
+        name "rl"
+        boundingObject Cylinder {
+          height 0.05
+          radius 0.05
+        }
+        physics Physics {
+        }
+      }
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        position 0.02559969172389514
+        axis 0 1 0
+        anchor 0.055 -0.095 0.05
+      }
+      device [
+        PositionSensor {
+          name "ps_fl"
+        }
+        RotationalMotor {
+          name "motor_fl"
+        }
+      ]
+      endPoint Solid {
+        translation 0.05499988993652555 -0.095 0.049995701408831764
+        rotation -0.5678042721926447 0.5820646560235048 0.582064467810929 2.108779427512445
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0 0 0
+              metalness 0.1
+            }
+            geometry Cylinder {
+              height 0.05
+              radius 0.05
+            }
+          }
+        ]
+        name "fl"
+        boundingObject Cylinder {
+          height 0.05
+          radius 0.05
+        }
+        physics Physics {
+        }
+      }
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        position 0.09598092243274428
+        axis 0 1 0
+        anchor -0.055 0.095 0.05
+      }
+      device [
+        PositionSensor {
+          name "ps_rr"
+        }
+        RotationalMotor {
+          name "motor_rr"
+        }
+      ]
+      endPoint Solid {
+        translation -0.05500050377281603 0.095 0.04999476747230002
+        rotation -0.5407315600907694 0.5948152443672143 0.5948144290366311 2.1502012014048306
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0 0 0
+              metalness 0.1
+            }
+            geometry Cylinder {
+              height 0.05
+              radius 0.05
+            }
+          }
+        ]
+        name "rr"
+        boundingObject Cylinder {
+          height 0.05
+          radius 0.05
+        }
+        physics Physics {
+        }
+      }
+    }
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        position 0.09598099083670728
+        axis 0 1 0
+        anchor 0.055 0.095 0.05
+      }
+      device [
+        PositionSensor {
+          name "ps_fr"
+        }
+        RotationalMotor {
+          name "motor_fr"
+        }
+      ]
+      endPoint Solid {
+        translation 0.055 0.095 0.05
+        rotation -0.5407315339503467 0.5948152637591403 0.5948144334083106 2.1502012737686815
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0 0 0
+              metalness 0.1
+            }
+            geometry Cylinder {
+              height 0.05
+              radius 0.05
+            }
+          }
+        ]
+        name "fr"
+        boundingObject Cylinder {
+          height 0.05
+          radius 0.05
+        }
+        physics Physics {
+        }
+      }
+    }
+    Pose {
+      translation 0 0 0.027
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.9 0.9 0.9
+            metalness 0.5
+          }
+          geometry Box {
+            size 0.16 0.14 0.003
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Pose {
+    translation 0 0 0.027
+    children [
+      Shape {
+        geometry Box {
+          size 0.16 0.14 0.003
+        }
+      }
+    ]
+  }
+  physics Physics {
+    mass 1.5
+  }
+  controller "line_pid_controller"
+}

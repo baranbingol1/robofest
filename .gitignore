@@ -205,3 +205,24 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS filesystem metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.TemporaryItems/
+
+# Windows filesystem metadata
+Thumbs.db
+Desktop.ini
+
+# Webots and simulation runtime output
+*.wbproj
+ders_cizim/worlds/_generated_*.wbt
+ders_cizim/artifacts/
+ders_cizim/controllers/rgb_rl_controller/ders_cizim/artifacts/
