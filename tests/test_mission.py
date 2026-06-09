@@ -2,11 +2,18 @@ import random
 import unittest
 
 from ders_cizim.controllers.rgb_rl_controller.mission import (
+    DEFAULT_COLOR_SEQUENCE,
+    DEFAULT_BRANCH_WAYPOINTS,
+    DEFAULT_FORK_ZONE,
     DEFAULT_GOAL_ZONES,
     GoalZone,
+    SequenceProgress,
     evaluate_terminal_reason,
     mission_config_from_env,
+    parse_color_sequence,
+    parse_branch_waypoints,
     parse_goal_zones,
+    parse_zone,
     randomized_start_pose,
 )
 
@@ -23,9 +30,58 @@ class MissionTests(unittest.TestCase):
         self.assertAlmostEqual(zones["red"].radius, 0.12)
         self.assertEqual(zones["blue"], DEFAULT_GOAL_ZONES["blue"])
 
+    def test_parse_color_sequence_filters_invalid_and_duplicate_colors(self):
+        self.assertEqual(parse_color_sequence("green,orange,red,green,blue"), ("green", "red", "blue"))
+        self.assertEqual(parse_color_sequence("orange"), tuple(DEFAULT_COLOR_SEQUENCE))
+
+    def test_parse_zone_accepts_configurable_fork_zone(self):
+        zone = parse_zone("0.4:-0.72:0.16", DEFAULT_FORK_ZONE)
+        self.assertEqual(zone.color, "fork")
+        self.assertEqual(zone.center, (0.4, -0.72))
+        self.assertAlmostEqual(zone.radius, 0.16)
+        self.assertEqual(parse_zone("bad", DEFAULT_FORK_ZONE), DEFAULT_FORK_ZONE)
+
+    def test_parse_branch_waypoints_overrides_known_colors(self):
+        waypoints = parse_branch_waypoints("green=0.2:-0.5,orange=1:1,blue=bad")
+        self.assertEqual(waypoints["green"], (0.2, -0.5))
+        self.assertEqual(waypoints["blue"], DEFAULT_BRANCH_WAYPOINTS["blue"])
+
     def test_mission_config_ignores_invalid_board_extent(self):
         config = mission_config_from_env({"MONSTERBORG_RL_BOARD_HALF_EXTENT": "wide"})
         self.assertAlmostEqual(config.board_half_extent, 1.0)
+
+    def test_mission_config_parses_sequence_options(self):
+        config = mission_config_from_env(
+            {
+                "MONSTERBORG_RL_MISSION_MODE": "all",
+                "MONSTERBORG_RL_COLOR_SEQUENCE": "blue,red",
+                "MONSTERBORG_RL_FORK_ZONE": "0.41 -0.69 0.11",
+                "MONSTERBORG_RL_BRANCH_WAYPOINTS": "blue=0.44 -0.48",
+                "MONSTERBORG_RL_START_RETURN_RADIUS": "0.09",
+            }
+        )
+        self.assertEqual(config.mission_mode, "sequence")
+        self.assertEqual(config.color_sequence, ("blue", "red"))
+        self.assertEqual(config.fork_zone.center, (0.41, -0.69))
+        self.assertEqual(config.branch_waypoints["blue"], (0.44, -0.48))
+        self.assertAlmostEqual(config.start_return_radius, 0.09)
+
+    def test_sequence_progress_visits_each_color_then_returns_home(self):
+        progress = SequenceProgress(("red", "green"))
+        self.assertEqual(progress.active_color, "red")
+        self.assertTrue(progress.mark_color_goal_reached())
+        self.assertEqual(progress.stage, "return_fork")
+        self.assertEqual(progress.visited_colors, ("red",))
+        self.assertTrue(progress.mark_returned_to_fork())
+        self.assertEqual(progress.active_color, "green")
+        self.assertEqual(progress.stage, "seek_color")
+        self.assertTrue(progress.mark_color_goal_reached())
+        self.assertTrue(progress.mark_returned_to_fork())
+        self.assertEqual(progress.stage, "return_start")
+        self.assertIsNone(progress.active_color)
+        self.assertTrue(progress.mark_returned_start())
+        self.assertTrue(progress.complete)
+        self.assertEqual(progress.visited_colors, ("red", "green"))
 
     def test_evaluate_terminal_reason_requires_goal_clearance(self):
         config = mission_config_from_env({})

@@ -27,6 +27,9 @@ class RunSummary:
     timed_out: bool
     lost_line: bool
     success: bool
+    returned_start: bool = False
+    sequence_complete: bool = False
+    sequence_visited_colors: tuple[str, ...] = ()
 
     def passed_smoke_gate(
         self,
@@ -34,6 +37,9 @@ class RunSummary:
         min_visible_ratio: float = 0.90,
         require_target_lock: bool = True,
         require_goal_reached: bool = False,
+        require_returned_start: bool = False,
+        require_sequence_complete: bool = False,
+        required_sequence_colors: Sequence[str] = (),
         min_goal_margin: float | None = None,
         min_travel_distance: float = 0.15,
     ) -> bool:
@@ -51,6 +57,14 @@ class RunSummary:
             return False
         if require_goal_reached and not self.reached_goal:
             return False
+        if require_returned_start and not self.returned_start:
+            return False
+        if require_sequence_complete and not self.sequence_complete:
+            return False
+        if required_sequence_colors:
+            visited = set(self.sequence_visited_colors)
+            if any(color not in visited for color in required_sequence_colors):
+                return False
         if min_goal_margin is not None:
             if self.final_goal_margin is None or self.final_goal_margin < min_goal_margin:
                 return False
@@ -109,6 +123,9 @@ def summarize_records(records: Iterable[dict[str, object]], *, board_half_extent
             timed_out=False,
             lost_line=False,
             success=False,
+            returned_start=False,
+            sequence_complete=False,
+            sequence_visited_colors=(),
         )
 
     visible_count = sum(1 for record in rows if bool(record.get("visible")))
@@ -149,6 +166,23 @@ def summarize_records(records: Iterable[dict[str, object]], *, board_half_extent
     reached_goal = terminal_reason == "reached_goal" or any(
         bool(record.get("reached_goal")) for record in rows
     )
+    returned_start = terminal_reason == "returned_start" or any(
+        bool(record.get("sequence_returned_start")) for record in rows
+    )
+    visited_colors: list[str] = []
+    for record in rows:
+        raw_visited = record.get("sequence_visited_colors")
+        if isinstance(raw_visited, Sequence) and not isinstance(raw_visited, (str, bytes)):
+            for color in raw_visited:
+                if isinstance(color, str) and color not in visited_colors:
+                    visited_colors.append(color)
+        event = record.get("sequence_event")
+        if isinstance(event, str) and event.startswith("reached_"):
+            color = event.removeprefix("reached_")
+            if color and color not in visited_colors:
+                visited_colors.append(color)
+    sequence_complete = returned_start or any(bool(record.get("sequence_complete")) for record in rows)
+    reached_goal = reached_goal or returned_start
     timed_out = terminal_reason == "timeout"
     lost_line = terminal_reason == "lost_line"
     off_board = off_board or terminal_reason == "off_board"
@@ -167,7 +201,10 @@ def summarize_records(records: Iterable[dict[str, object]], *, board_half_extent
         reached_goal=reached_goal,
         timed_out=timed_out,
         lost_line=lost_line,
-        success=reached_goal and not off_board and not lost_line,
+        success=(reached_goal or returned_start) and not off_board and not lost_line and not timed_out,
+        returned_start=returned_start,
+        sequence_complete=sequence_complete,
+        sequence_visited_colors=tuple(visited_colors),
     )
 
 

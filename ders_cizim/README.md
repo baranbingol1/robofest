@@ -11,7 +11,7 @@ The active controller is `controllers/rgb_rl_controller/rgb_rl_controller.py`.
 The controller now uses shared modules:
 
 - `control_core.py`: action names, wheel-speed conversion, safety clipping, reward, target-search branch bias.
-- `mission.py`: configurable start pose jitter, target parking zones, and terminal episode reasons.
+- `mission.py`: configurable start pose jitter, target parking zones, RGB sequence mode, and terminal episode reasons.
 - `robot_config.py`: camera pose, camera sensor settings, speed limits, environment parsing.
 - `sim_metrics.py`: repeatable smoke-run summaries with goal-success gates.
 - `vision_adapter.py`: Webots-like adapter for RGB arrays from Pi camera frames.
@@ -23,7 +23,7 @@ The runtime is split into three layers:
 
 1. Perception samples the lower camera image, classifies black/red/green/blue pixels, segments the visible line, and emits `visible`, `center_error`, `confidence`, `color_name`, and `matched_target`.
 2. Control follows the common black line until the fork, then either locks onto the selected color or applies a small branch-search bias for green/blue. The selected action is converted into clipped differential wheel speeds.
-3. Mission supervision is simulation-only: Webots global pose is used to reset randomized starts and stop the episode when the robot reaches the selected color parking zone, leaves the board, loses the line for too long, or times out.
+3. Mission supervision is simulation-only: Webots global pose is used to reset randomized starts, score color-zone visits, assist sequence handoffs at the fork, return to the randomized start pose, and stop the episode when the mission is done or unsafe.
 
 The Raspberry Pi path should reuse layers 1 and 2. Layer 3 should be replaced by a real-world stop rule such as a visible finish marker, a measured distance gate, or a manual/operator stop.
 
@@ -34,7 +34,7 @@ Default parking zones on the current RGB texture:
 ```text
 red   center=(0.80, -0.55) radius=0.18
 green center=(0.10, -0.50) radius=0.20
-blue  center=(0.32, -0.28) radius=0.20
+blue  center=(0.32, -0.28) radius=0.30
 ```
 
 Mission success requires the robot to stop inside the selected zone with a default `0.02 m` clearance from the zone boundary. This avoids counting first-contact boundary crossings as parked.
@@ -42,11 +42,11 @@ Mission success requires the robot to stop inside the selected zone with a defau
 Override them without editing code:
 
 ```powershell
-$env:MONSTERBORG_RL_GOAL_ZONES='red=0.80:-0.55:0.18,green=0.10:-0.50:0.20,blue=0.32:-0.28:0.20'
+$env:MONSTERBORG_RL_GOAL_ZONES='red=0.80:-0.55:0.18,green=0.10:-0.50:0.20,blue=0.32:-0.28:0.30'
 $env:MONSTERBORG_RL_GOAL_REACH_CLEARANCE='0.02'
 ```
 
-Terminal reasons are written into logs as `reached_goal`, `off_board`, `lost_line`, or `timeout`. The smoke matrix requires `reached_goal` and at least `0.015 m` final goal margin. Summaries include `final_goal_distance` and `final_goal_margin`.
+Terminal reasons are written into logs as `reached_goal`, `returned_start`, `off_board`, `lost_line`, or `timeout`. Single-color smoke runs require `reached_goal`; sequence smoke runs require `returned_start` after all configured colors are visited. Summaries include `final_goal_distance` and `final_goal_margin`.
 
 ## Camera Pose
 
@@ -97,6 +97,27 @@ $env:MONSTERBORG_RL_STEP_LOG_PATH='ders_cizim\artifacts\rgb_rl\run_green_950.jso
 $env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_green_950_summary.json'
 & 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\monsterborg_rgb_rl.wbt'
 ```
+
+Run the full RGB sequence mission and return to the randomized black-line start:
+
+```powershell
+python -m ders_cizim.controllers.rgb_rl_controller.smoke_matrix `
+  --webots 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' `
+  --world 'ders_cizim\worlds\monsterborg_rgb_rl.wbt' `
+  --textures 'ders_cizim\worlds\textures\rgb_training_tracks.png' `
+  --mission-mode sequence `
+  --sequence red green blue `
+  --steps 9000 `
+  --episodes 2 `
+  --seed 77 `
+  --start-lateral-jitter 0.02 `
+  --start-longitudinal-jitter 0.025 `
+  --start-heading-jitter 0.035 `
+  --camera-noise 0.003 `
+  --out-dir 'ders_cizim\artifacts\rgb_rl\sequence_check'
+```
+
+Sequence mode logs `sequence_visited_colors`, `sequence_complete`, `sequence_returned_start`, and `supervisor_handoff`. The handoff is deliberate Webots scaffolding for the multi-color simulation mission; keep it separate from the Raspberry Pi hardware runner.
 
 Summarize logs:
 
@@ -165,6 +186,16 @@ Motor asymmetry can also be set directly:
 $env:MONSTERBORG_RL_LEFT_SPEED_SCALE='0.96'
 $env:MONSTERBORG_RL_RIGHT_SPEED_SCALE='1.03'
 ```
+
+Add transfer realism without editing code:
+
+```powershell
+$env:MONSTERBORG_RL_MOTOR_DEADBAND='0.03'
+$env:MONSTERBORG_RL_SPEED_NOISE_STD='0.01'
+$env:MONSTERBORG_RL_COMMAND_LATENCY_STEPS='1'
+```
+
+These are intentionally off by default. Use small values after the nominal run passes; the expected course should have mild bumps and imperfect tape, not extreme sensor noise. Terminal stops bypass latency so `reached_goal`, `lost_line`, and other stop conditions still command zero speed immediately.
 
 Run a camera-mount perturbation matrix:
 
@@ -277,6 +308,26 @@ Start conservatively:
 $env:MONSTERBORG_HARDWARE_OUTPUT_LIMIT='0.35'
 ```
 
+Laptop setup:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+python -m unittest discover -s tests -v
+```
+
+On macOS/Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+python -m unittest discover -s tests -v
+```
+
+Raspberry Pi setup should also install the OS-provided camera stack and the PiBorg/ThunderBorg Python library. The project package intentionally keeps those hardware libraries lazy so laptop tests can run without them.
+
 On the physical robot, verify these before autonomous driving:
 
 - The camera frame sees line plus floor, not only line.
@@ -324,3 +375,32 @@ python -m ders_cizim.controllers.rgb_rl_controller.hardware_motor_calibration `
 ```
 
 The calibration script clamps power to `0.25`, inserts stops between pulses, and defaults to dry-run unless `--armed` is provided.
+
+Run the physical closed-loop controller only after the probe and motor-sign calibration pass. It defaults to dry-run motor logging:
+
+```powershell
+python -m ders_cizim.controllers.rgb_rl_controller.hardware_runner `
+  --target green `
+  --frames 400 `
+  --max-seconds 20 `
+  --hardware-output-limit 0.30 `
+  --branch-search-after-frames 80 `
+  --stop-file stop_robot.txt `
+  --output hardware_run_green.json
+```
+
+When the robot is on the floor, the camera is ready, and someone is next to it with a manual stop path, add `--armed`:
+
+```powershell
+python -m ders_cizim.controllers.rgb_rl_controller.hardware_runner `
+  --target green `
+  --frames 400 `
+  --max-seconds 20 `
+  --hardware-output-limit 0.30 `
+  --branch-search-after-frames 80 `
+  --stop-file stop_robot.txt `
+  --output hardware_run_green.json `
+  --armed
+```
+
+If `stop_robot.txt` exists, the runner stops before sending the next command. If the line disappears, it commands stop while waiting for recovery and exits after the configured lost-frame limit. If the warmup camera frames fail the visibility, confidence, or line-width gate, it exits without driving.

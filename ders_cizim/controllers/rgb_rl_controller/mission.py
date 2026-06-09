@@ -49,6 +49,11 @@ class MissionConfig:
     require_target_lock: bool
     stop_on_goal: bool
     quit_on_done: bool
+    mission_mode: str
+    color_sequence: tuple[str, ...]
+    fork_zone: GoalZone
+    branch_waypoints: Mapping[str, tuple[float, float]]
+    start_return_radius: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +67,67 @@ class StartPose:
 DEFAULT_GOAL_ZONES = {
     "red": GoalZone("red", (0.80, -0.55), 0.18),
     "green": GoalZone("green", (0.10, -0.50), 0.20),
-    "blue": GoalZone("blue", (0.32, -0.28), 0.20),
+    "blue": GoalZone("blue", (0.32, -0.28), 0.30),
+}
+DEFAULT_COLOR_SEQUENCE = TARGET_COLORS
+DEFAULT_FORK_ZONE = GoalZone("fork", (0.38, -0.70), 0.18)
+DEFAULT_BRANCH_WAYPOINTS = {
+    "red": (0.50, -0.70),
+    "green": (0.24, -0.58),
+    "blue": (0.39, -0.49),
 }
 DEFAULT_GOAL_REACH_CLEARANCE = 0.02
+DEFAULT_START_RETURN_RADIUS = 0.12
+
+
+@dataclass(slots=True)
+class SequenceProgress:
+    colors: tuple[str, ...]
+    index: int = 0
+    stage: str = "seek_color"
+    visited_colors: tuple[str, ...] = ()
+    current_color_reached: bool = False
+    returned_to_fork: bool = False
+    returned_start: bool = False
+
+    @property
+    def active_color(self) -> str | None:
+        if self.index >= len(self.colors):
+            return None
+        return self.colors[self.index]
+
+    @property
+    def complete(self) -> bool:
+        return self.stage == "returned_start"
+
+    def mark_color_goal_reached(self) -> bool:
+        color = self.active_color
+        if color is None or self.current_color_reached:
+            return False
+        self.current_color_reached = True
+        self.stage = "return_fork"
+        if color not in self.visited_colors:
+            self.visited_colors = (*self.visited_colors, color)
+        return True
+
+    def mark_returned_to_fork(self) -> bool:
+        if not self.current_color_reached or self.stage != "return_fork":
+            return False
+        self.returned_to_fork = True
+        self.index += 1
+        self.current_color_reached = False
+        if self.index >= len(self.colors):
+            self.stage = "return_start"
+        else:
+            self.stage = "seek_color"
+        return True
+
+    def mark_returned_start(self) -> bool:
+        if self.stage != "return_start":
+            return False
+        self.returned_start = True
+        self.stage = "returned_start"
+        return True
 
 
 def parse_bool(value: str | None, *, default: bool) -> bool:
@@ -87,6 +150,71 @@ def parse_nonnegative_float(value: str | None, default: float) -> float:
     if parsed < 0.0:
         return default
     return parsed
+
+
+def parse_positive_float(value: str | None, default: float) -> float:
+    parsed = parse_float(value, default)
+    if parsed <= 0.0:
+        return default
+    return parsed
+
+
+def parse_mission_mode(value: str | None) -> str:
+    mode = (value or "single").strip().lower()
+    if mode in {"sequence", "multi", "all"}:
+        return "sequence"
+    return "single"
+
+
+def parse_color_sequence(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return tuple(DEFAULT_COLOR_SEQUENCE)
+    colors: list[str] = []
+    for item in value.replace(">", ",").replace(";", ",").split(","):
+        color = item.strip().lower()
+        if color in TARGET_COLORS and color not in colors:
+            colors.append(color)
+    return tuple(colors) if colors else tuple(DEFAULT_COLOR_SEQUENCE)
+
+
+def parse_zone(value: str | None, default: GoalZone) -> GoalZone:
+    if not value:
+        return default
+    parts = value.replace(":", " ").replace(",", " ").split()
+    if len(parts) != 3:
+        return default
+    try:
+        x, y, radius = (float(part) for part in parts)
+    except ValueError:
+        return default
+    if radius <= 0:
+        return default
+    return GoalZone(default.color, (x, y), radius)
+
+
+def parse_branch_waypoints(value: str | None) -> dict[str, tuple[float, float]]:
+    waypoints = dict(DEFAULT_BRANCH_WAYPOINTS)
+    if not value:
+        return waypoints
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        color, sep, spec = item.partition("=")
+        if not sep:
+            continue
+        color = color.strip().lower()
+        if color not in TARGET_COLORS:
+            continue
+        parts = spec.replace(":", " ").split()
+        if len(parts) != 2:
+            continue
+        try:
+            x, y = (float(part) for part in parts)
+        except ValueError:
+            continue
+        waypoints[color] = (x, y)
+    return waypoints
 
 
 def parse_goal_zones(value: str | None) -> dict[str, GoalZone]:
@@ -127,6 +255,14 @@ def mission_config_from_env(environ: Mapping[str, str]) -> MissionConfig:
         require_target_lock=parse_bool(environ.get("MONSTERBORG_RL_GOAL_REQUIRES_TARGET_LOCK"), default=True),
         stop_on_goal=parse_bool(environ.get("MONSTERBORG_RL_STOP_ON_GOAL"), default=True),
         quit_on_done=parse_bool(environ.get("MONSTERBORG_RL_QUIT_ON_MISSION_DONE"), default=False),
+        mission_mode=parse_mission_mode(environ.get("MONSTERBORG_RL_MISSION_MODE")),
+        color_sequence=parse_color_sequence(environ.get("MONSTERBORG_RL_COLOR_SEQUENCE")),
+        fork_zone=parse_zone(environ.get("MONSTERBORG_RL_FORK_ZONE"), DEFAULT_FORK_ZONE),
+        branch_waypoints=parse_branch_waypoints(environ.get("MONSTERBORG_RL_BRANCH_WAYPOINTS")),
+        start_return_radius=parse_positive_float(
+            environ.get("MONSTERBORG_RL_START_RETURN_RADIUS"),
+            DEFAULT_START_RETURN_RADIUS,
+        ),
     )
 
 
@@ -150,6 +286,25 @@ def evaluate_terminal_reason(
     if zone is not None and zone.contains(translation, clearance=config.goal_reach_clearance):
         if not config.require_target_lock or target_seen:
             return "reached_goal"
+    if max_steps > 0 and episode_step >= max_steps:
+        return "timeout"
+    return None
+
+
+def evaluate_safety_terminal_reason(
+    *,
+    translation: Sequence[float] | None,
+    lost_steps: int,
+    lost_reset_steps: int,
+    episode_step: int,
+    max_steps: int,
+    config: MissionConfig,
+) -> str | None:
+    if translation is not None and len(translation) >= 2:
+        if abs(float(translation[0])) > config.board_half_extent or abs(float(translation[1])) > config.board_half_extent:
+            return "off_board"
+    if lost_reset_steps > 0 and lost_steps >= lost_reset_steps:
+        return "lost_line"
     if max_steps > 0 and episode_step >= max_steps:
         return "timeout"
     return None

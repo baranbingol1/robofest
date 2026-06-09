@@ -3,13 +3,14 @@ import unittest
 from ders_cizim.controllers.rgb_rl_controller.control_core import (
     ACTION_NAMES,
     DifferentialDriveCommand,
+    apply_drive_realism,
     action_to_command,
     clamp,
     heuristic_action,
     parse_target_search_actions,
     target_search_action,
 )
-from ders_cizim.controllers.rgb_rl_controller.robot_config import DEFAULT_SAFETY_LIMITS
+from ders_cizim.controllers.rgb_rl_controller.robot_config import DEFAULT_SAFETY_LIMITS, DriveRealism
 
 
 class _Profile:
@@ -57,6 +58,14 @@ class ControlCoreTests(unittest.TestCase):
         self.assertEqual(mapping["red"], "soft_right")
         self.assertEqual(mapping["green"], "left")
         self.assertEqual(mapping["blue"], "straight")
+
+    def test_apply_drive_realism_zeroes_small_deadband_commands(self):
+        command = DifferentialDriveCommand(left=0.04, right=-0.11)
+        realism = DriveRealism(motor_deadband=0.05, speed_noise_std=0.0, command_latency_steps=0)
+        self.assertEqual(
+            apply_drive_realism(command, realism),
+            DifferentialDriveCommand(left=0.0, right=-0.11),
+        )
 
 
 if __name__ == "__main__":

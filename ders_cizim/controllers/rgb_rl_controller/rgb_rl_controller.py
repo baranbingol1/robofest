@@ -8,12 +8,15 @@ import os
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Sequence
 
 try:
     from .control_core import (
         ACTION_NAMES,
         ACTION_TURNS,
         TARGET_COLORS,
+        DifferentialDriveCommand,
+        apply_drive_realism,
         action_to_speeds,
         clamp,
         compute_reward,
@@ -21,11 +24,22 @@ try:
         parse_target_search_actions,
         target_search_action,
     )
-    from .robot_config import DEFAULT_SAFETY_LIMITS, camera_pose_from_env, env_float, env_int, safety_limits_from_env
+    from .robot_config import (
+        DEFAULT_DRIVE_REALISM,
+        DEFAULT_SAFETY_LIMITS,
+        DriveRealism,
+        camera_pose_from_env,
+        drive_realism_from_env,
+        env_float,
+        env_int,
+        safety_limits_from_env,
+    )
     from .mission import (
         DEFAULT_START_ROTATION,
         DEFAULT_START_TRANSLATION,
+        SequenceProgress,
         StartPose,
+        evaluate_safety_terminal_reason,
         evaluate_terminal_reason,
         mission_config_from_env,
         randomized_start_pose,
@@ -36,6 +50,8 @@ except ImportError:  # Webots executes controllers from their own directory.
         ACTION_NAMES,
         ACTION_TURNS,
         TARGET_COLORS,
+        DifferentialDriveCommand,
+        apply_drive_realism,
         action_to_speeds,
         clamp,
         compute_reward,
@@ -43,11 +59,22 @@ except ImportError:  # Webots executes controllers from their own directory.
         parse_target_search_actions,
         target_search_action,
     )
-    from robot_config import DEFAULT_SAFETY_LIMITS, camera_pose_from_env, env_float, env_int, safety_limits_from_env
+    from robot_config import (
+        DEFAULT_DRIVE_REALISM,
+        DEFAULT_SAFETY_LIMITS,
+        DriveRealism,
+        camera_pose_from_env,
+        drive_realism_from_env,
+        env_float,
+        env_int,
+        safety_limits_from_env,
+    )
     from mission import (
         DEFAULT_START_ROTATION,
         DEFAULT_START_TRANSLATION,
+        SequenceProgress,
         StartPose,
+        evaluate_safety_terminal_reason,
         evaluate_terminal_reason,
         mission_config_from_env,
         randomized_start_pose,
@@ -56,6 +83,7 @@ except ImportError:  # Webots executes controllers from their own directory.
 
 TIME_STEP_FALLBACK = 32
 SAFETY_LIMITS = DEFAULT_SAFETY_LIMITS
+DRIVE_REALISM = DEFAULT_DRIVE_REALISM
 MAX_SPEED = SAFETY_LIMITS.webots_max_speed
 BASE_SPEED = SAFETY_LIMITS.webots_base_speed
 LEFT_SPEED_SCALE = 1.0
@@ -427,6 +455,19 @@ def set_left_right_speed(left_motors, right_motors, left_speed: float, right_spe
     return left_speed, right_speed
 
 
+def delayed_drive_command(
+    desired: DifferentialDriveCommand,
+    queue: list[DifferentialDriveCommand],
+    realism: DriveRealism,
+) -> DifferentialDriveCommand:
+    if realism.command_latency_steps <= 0:
+        return desired
+    queue.append(desired)
+    if len(queue) <= realism.command_latency_steps:
+        return DifferentialDriveCommand(0.0, 0.0)
+    return queue.pop(0)
+
+
 def save_camera_ppm(camera, camera_api, path: Path) -> None:
     width = int(camera.getWidth())
     height = int(camera.getHeight())
@@ -532,8 +573,114 @@ def should_search_for_target_branch(
     return profile.target_color in TARGET_COLORS
 
 
+def axis_angle_to_matrix(rotation: Sequence[float] | None) -> tuple[tuple[float, float, float], ...] | None:
+    if rotation is None or len(rotation) < 4:
+        return None
+    try:
+        x, y, z, angle = (float(value) for value in rotation[:4])
+    except (TypeError, ValueError):
+        return None
+    norm = math.sqrt(x * x + y * y + z * z)
+    if norm <= 1e-9:
+        return None
+    x /= norm
+    y /= norm
+    z /= norm
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    one_minus_cosine = 1.0 - cosine
+    return (
+        (
+            cosine + x * x * one_minus_cosine,
+            x * y * one_minus_cosine - z * sine,
+            x * z * one_minus_cosine + y * sine,
+        ),
+        (
+            y * x * one_minus_cosine + z * sine,
+            cosine + y * y * one_minus_cosine,
+            y * z * one_minus_cosine - x * sine,
+        ),
+        (
+            z * x * one_minus_cosine - y * sine,
+            z * y * one_minus_cosine + x * sine,
+            cosine + z * z * one_minus_cosine,
+        ),
+    )
+
+
+def projected_forward_vector(rotation: Sequence[float] | None) -> tuple[float, float] | None:
+    matrix = axis_angle_to_matrix(rotation)
+    if matrix is None:
+        return None
+    local_forward = (-1.0, 0.0, 0.0)
+    forward_x = sum(matrix[0][index] * local_forward[index] for index in range(3))
+    forward_y = sum(matrix[1][index] * local_forward[index] for index in range(3))
+    norm = math.hypot(forward_x, forward_y)
+    if norm <= 1e-6:
+        return None
+    return forward_x / norm, forward_y / norm
+
+
+def projected_motion_vector(
+    current_translation: Sequence[float] | None,
+    previous_translation: Sequence[float] | None,
+) -> tuple[float, float] | None:
+    if (
+        current_translation is None
+        or previous_translation is None
+        or len(current_translation) < 2
+        or len(previous_translation) < 2
+    ):
+        return None
+    dx = float(current_translation[0]) - float(previous_translation[0])
+    dy = float(current_translation[1]) - float(previous_translation[1])
+    norm = math.hypot(dx, dy)
+    if norm <= 0.0015:
+        return None
+    return dx / norm, dy / norm
+
+
+def pose_guided_return_command(
+    *,
+    current_translation: Sequence[float] | None,
+    current_rotation: Sequence[float] | None,
+    previous_translation: Sequence[float] | None = None,
+    target_translation: Sequence[float],
+    limits,
+    allow_reverse: bool = False,
+) -> DifferentialDriveCommand:
+    if current_translation is None or len(current_translation) < 2:
+        return DifferentialDriveCommand(0.0, 0.0)
+    target_x = float(target_translation[0]) - float(current_translation[0])
+    target_y = float(target_translation[1]) - float(current_translation[1])
+    distance = math.hypot(target_x, target_y)
+    if distance <= 1e-6:
+        return DifferentialDriveCommand(0.0, 0.0)
+    target_x /= distance
+    target_y /= distance
+    forward = projected_motion_vector(current_translation, previous_translation)
+    if forward is None:
+        forward = projected_forward_vector(current_rotation)
+    if forward is None:
+        return DifferentialDriveCommand(limits.webots_base_speed, limits.webots_base_speed)
+    direction = 1.0
+    alignment = forward[0] * target_x + forward[1] * target_y
+    if allow_reverse and alignment < -0.20:
+        forward = (-forward[0], -forward[1])
+        direction = -1.0
+    heading_cross = forward[0] * target_y - forward[1] * target_x
+    heading_dot = clamp(forward[0] * target_x + forward[1] * target_y, -1.0, 1.0)
+    heading_error = math.atan2(heading_cross, heading_dot)
+    base_magnitude = clamp(0.42 + distance * 0.90, 0.40, limits.webots_base_speed)
+    if abs(heading_error) > 1.25:
+        base_magnitude *= 0.45
+    base = direction * base_magnitude
+    turn = clamp(heading_error * 0.85, -0.85, 0.85)
+    return DifferentialDriveCommand(base - turn, base + turn).clipped(limits.webots_max_speed)
+
+
 def main() -> None:
-    global SAFETY_LIMITS, MAX_SPEED, BASE_SPEED, LEFT_SPEED_SCALE, RIGHT_SPEED_SCALE
+    global SAFETY_LIMITS, DRIVE_REALISM, MAX_SPEED, BASE_SPEED, LEFT_SPEED_SCALE, RIGHT_SPEED_SCALE
 
     try:
         from controller import Camera, Supervisor
@@ -544,6 +691,7 @@ def main() -> None:
     random.seed(seed)
     start_rng = random.Random(env_int("MONSTERBORG_RL_START_SEED", seed))
     SAFETY_LIMITS = safety_limits_from_env()
+    DRIVE_REALISM = drive_realism_from_env()
     MAX_SPEED = SAFETY_LIMITS.webots_max_speed
     BASE_SPEED = SAFETY_LIMITS.webots_base_speed
     LEFT_SPEED_SCALE = max(0.0, env_float("MONSTERBORG_RL_LEFT_SPEED_SCALE", 1.0))
@@ -563,7 +711,16 @@ def main() -> None:
     target_lock_min_x = env_float("MONSTERBORG_RL_TARGET_LOCK_MIN_X", 0.04)
     target_lock_min_step = env_int("MONSTERBORG_RL_TARGET_LOCK_MIN_STEP", 0)
     branch_search_min_x = env_float("MONSTERBORG_RL_BRANCH_SEARCH_MIN_X", 0.30)
+    branch_guide_steps = max(0, env_int("MONSTERBORG_RL_BRANCH_GUIDE_STEPS", 220))
+    supervisor_handoff_enabled = os.getenv("MONSTERBORG_RL_SUPERVISOR_HANDOFF", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     target_search_actions = parse_target_search_actions(os.getenv("MONSTERBORG_RL_TARGET_SEARCH_ACTIONS"))
+    drive_rng = random.Random(seed + 97_531)
+    command_latency_queue: list[DifferentialDriveCommand] = []
 
     robot = Supervisor()
     timestep = int(robot.getBasicTimeStep()) or TIME_STEP_FALLBACK
@@ -611,22 +768,38 @@ def main() -> None:
     step_log_path = os.getenv("MONSTERBORG_RL_STEP_LOG_PATH")
     summary_path = os.getenv("MONSTERBORG_RL_SUMMARY_PATH")
     step_records: list[dict[str, object]] = []
+    previous_translation_for_heading: tuple[float, float, float] | None = None
 
     print(
         "rgb_rl_controller",
         f"mode={mode}",
         f"q_table={policy.path}",
         f"loaded_states={len(policy.table)}",
+        f"deadband={DRIVE_REALISM.motor_deadband:.3f}",
+        f"speed_noise={DRIVE_REALISM.speed_noise_std:.3f}",
+        f"latency_steps={DRIVE_REALISM.command_latency_steps}",
         flush=True,
     )
 
-    target_color = normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
+    sequence_mode = mission_config.mission_mode == "sequence" and not train_mode
+    sequence_progress = SequenceProgress(mission_config.color_sequence) if sequence_mode else None
+    sequence_branch_guide_steps_remaining = 0
+    target_color = (
+        sequence_progress.active_color
+        if sequence_progress is not None and sequence_progress.active_color is not None
+        else normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
+    )
     start_pose = make_start_pose(start_rng)
     print(f"target_color={target_color}", flush=True)
     print(
         "mission",
+        f"mission_mode={'sequence' if sequence_mode else 'single'}",
+        f"sequence={','.join(mission_config.color_sequence)}",
         f"goal={mission_config.zones[target_color].center if target_color in mission_config.zones else 'none'}",
         f"radius={mission_config.zones[target_color].radius if target_color in mission_config.zones else 'none'}",
+        f"fork={mission_config.fork_zone.center}",
+        f"fork_radius={mission_config.fork_zone.radius}",
+        f"start_radius={mission_config.start_return_radius}",
         f"start={start_pose.translation}",
         flush=True,
     )
@@ -634,17 +807,24 @@ def main() -> None:
 
     while robot.step(timestep) != -1:
         current_translation = translation_field.getSFVec3f() if translation_field is not None else None
+        current_rotation = rotation_field.getSFRotation() if rotation_field is not None else None
+        if sequence_progress is not None and sequence_progress.active_color is not None:
+            target_color = sequence_progress.active_color
+        mission_stage = sequence_progress.stage if sequence_progress is not None else "single"
+        returning_start = mission_stage == "return_start"
+        returning_to_fork = mission_stage == "return_fork"
+        active_camera_target = target_color if target_color in TARGET_COLORS else "red"
         position_gate_open = (
             True if current_translation is None else float(current_translation[0]) >= target_lock_min_x
         )
         step_gate_open = episode_step + 1 >= target_lock_min_step
-        target_handoff_open = target_seen or (position_gate_open and step_gate_open)
+        target_handoff_open = (target_seen or (position_gate_open and step_gate_open)) and not returning_start
         profile = analyze_rgb_camera(
             camera,
             Camera,
-            target_color,
+            active_camera_target,
             previous_error,
-            allow_common=not target_seen,
+            allow_common=returning_start or returning_to_fork or not target_seen,
             allow_target=target_handoff_open,
         )
         target_lock_candidate = (
@@ -660,6 +840,7 @@ def main() -> None:
             target_lock_candidates = 0
         if target_lock_candidates >= 2:
             target_seen = True
+            sequence_branch_guide_steps_remaining = 0
         should_capture = (
             bool(capture_path)
             and not captured_debug_frame
@@ -710,27 +891,170 @@ def main() -> None:
         else:
             epsilon = env_float("MONSTERBORG_RL_EPSILON", 0.0)
 
-        terminal_reason = evaluate_terminal_reason(
-            target_color=target_color,
-            translation=current_translation,
-            target_seen=target_seen,
-            lost_steps=lost_steps,
-            lost_reset_steps=lost_reset_steps,
-            episode_step=episode_step,
-            max_steps=episode_steps_limit if train_mode else max_run_steps,
-            config=mission_config,
-        )
+        sequence_event: str | None = None
+        supervisor_handoff = False
+        if sequence_progress is None:
+            terminal_reason = evaluate_terminal_reason(
+                target_color=target_color,
+                translation=current_translation,
+                target_seen=target_seen,
+                lost_steps=lost_steps,
+                lost_reset_steps=lost_reset_steps,
+                episode_step=episode_step,
+                max_steps=episode_steps_limit if train_mode else max_run_steps,
+                config=mission_config,
+            )
+        else:
+            terminal_reason = None
+            active_color = sequence_progress.active_color
+            if active_color is not None and not sequence_progress.current_color_reached:
+                zone = mission_config.zones.get(active_color)
+                target_ready = target_seen or not mission_config.require_target_lock
+                if zone is not None and target_ready and zone.contains(
+                    current_translation,
+                    clearance=mission_config.goal_reach_clearance,
+                ):
+                    reached_last_color = sequence_progress.index >= len(sequence_progress.colors) - 1
+                    if sequence_progress.mark_color_goal_reached():
+                        sequence_event = f"reached_{active_color}"
+                    if reached_last_color and supervisor_handoff_enabled and self_node is not None:
+                        sequence_progress.mark_returned_to_fork()
+                        set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
+                        reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
+                        current_translation = list(start_pose.translation)
+                        current_rotation = list(start_pose.rotation)
+                        previous_translation_for_heading = None
+                        if sequence_progress.mark_returned_start():
+                            sequence_event = "returned_start"
+                        terminal_reason = "returned_start"
+                        supervisor_handoff = True
+            fork_ready = (
+                supervisor_handoff_enabled
+                or profile.color_name == "black"
+                or not profile.matched_target
+                or mission_config.fork_zone.contains(
+                    current_translation,
+                    clearance=mission_config.fork_zone.radius * 0.35,
+                )
+            )
+            if (
+                sequence_progress.stage == "return_fork"
+                and mission_config.fork_zone.contains(current_translation)
+                and fork_ready
+            ):
+                completed_color = sequence_progress.active_color
+                if sequence_progress.mark_returned_to_fork():
+                    sequence_event = f"returned_fork_after_{completed_color}"
+                    target_seen = False
+                    target_lock_candidates = 0
+                    previous_error = 0.0
+                    lost_steps = 0
+                    command_latency_queue.clear()
+                    if sequence_progress.active_color is not None:
+                        target_color = sequence_progress.active_color
+                        if supervisor_handoff_enabled and self_node is not None:
+                            fork_pose = StartPose(
+                                (
+                                    mission_config.fork_zone.center[0],
+                                    mission_config.fork_zone.center[1],
+                                    start_pose.translation[2],
+                                ),
+                                tuple(DEFAULT_START_ROTATION),
+                            )
+                            set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
+                            reset_robot_if_possible(robot, self_node, translation_field, rotation_field, fork_pose)
+                            current_translation = list(fork_pose.translation)
+                            current_rotation = list(fork_pose.rotation)
+                            previous_translation_for_heading = None
+                            sequence_branch_guide_steps_remaining = 0
+                            supervisor_handoff = True
+                        else:
+                            sequence_branch_guide_steps_remaining = branch_guide_steps
+                    elif supervisor_handoff_enabled and self_node is not None:
+                        set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
+                        reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
+                        current_translation = list(start_pose.translation)
+                        current_rotation = list(start_pose.rotation)
+                        previous_translation_for_heading = None
+                        if sequence_progress.mark_returned_start():
+                            sequence_event = "returned_start"
+                        terminal_reason = "returned_start"
+                        supervisor_handoff = True
+            if sequence_progress.stage == "return_start":
+                home_distance = math.hypot(
+                    float(current_translation[0]) - start_pose.translation[0],
+                    float(current_translation[1]) - start_pose.translation[1],
+                ) if current_translation is not None and len(current_translation) >= 2 else None
+                if home_distance is not None and home_distance <= mission_config.start_return_radius:
+                    if sequence_progress.mark_returned_start():
+                        sequence_event = "returned_start"
+                    terminal_reason = "returned_start"
+            if terminal_reason is None:
+                safety_lost_steps = 0 if sequence_progress.stage == "return_start" else lost_steps
+                terminal_reason = evaluate_safety_terminal_reason(
+                    translation=current_translation,
+                    lost_steps=safety_lost_steps,
+                    lost_reset_steps=lost_reset_steps,
+                    episode_step=episode_step,
+                    max_steps=episode_steps_limit if train_mode else max_run_steps,
+                    config=mission_config,
+                )
         record_target_color = target_color
         record_start_pose = start_pose
+        mission_stage = sequence_progress.stage if sequence_progress is not None else "single"
 
         if terminal_reason is not None:
+            command_latency_queue.clear()
             action = ACTION_NAMES.index("straight")
             action_name = "stop"
             left_speed = 0.0
             right_speed = 0.0
             left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
         else:
-            if target_color in target_search_actions and should_search_for_target_branch(
+            manual_drive_applied = False
+            if sequence_progress is not None and sequence_progress.stage == "return_start":
+                action = ACTION_NAMES.index("straight")
+                action_name = "return_home"
+                command = pose_guided_return_command(
+                    current_translation=current_translation,
+                    current_rotation=current_rotation,
+                    previous_translation=previous_translation_for_heading,
+                    target_translation=start_pose.translation,
+                    limits=SAFETY_LIMITS,
+                    allow_reverse=True,
+                )
+                delayed = delayed_drive_command(command, command_latency_queue, DRIVE_REALISM)
+                realistic = apply_drive_realism(delayed, DRIVE_REALISM, drive_rng)
+                left_speed = realistic.left
+                right_speed = realistic.right
+                left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
+                manual_drive_applied = True
+            elif (
+                sequence_progress is not None
+                and sequence_progress.stage == "seek_color"
+                and not target_seen
+                and sequence_branch_guide_steps_remaining > 0
+                and target_color in mission_config.branch_waypoints
+            ):
+                action = ACTION_NAMES.index("straight")
+                action_name = "branch_guide"
+                waypoint = mission_config.branch_waypoints[target_color]
+                command = pose_guided_return_command(
+                    current_translation=current_translation,
+                    current_rotation=current_rotation,
+                    previous_translation=previous_translation_for_heading,
+                    target_translation=(waypoint[0], waypoint[1], start_pose.translation[2]),
+                    limits=SAFETY_LIMITS,
+                    allow_reverse=True,
+                )
+                sequence_branch_guide_steps_remaining -= 1
+                delayed = delayed_drive_command(command, command_latency_queue, DRIVE_REALISM)
+                realistic = apply_drive_realism(delayed, DRIVE_REALISM, drive_rng)
+                left_speed = realistic.left
+                right_speed = realistic.right
+                left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
+                manual_drive_applied = True
+            elif target_color in target_search_actions and should_search_for_target_branch(
                 profile,
                 target_seen=target_seen,
                 target_handoff_open=target_handoff_open,
@@ -740,13 +1064,23 @@ def main() -> None:
                 action = target_search_action(target_color, target_search_actions)
             else:
                 action = policy.choose_action(key, profile, epsilon)
-            action_name = ACTION_NAMES[action]
-            left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
-            left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
+            if not manual_drive_applied:
+                action_name = ACTION_NAMES[action]
+                left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
+                delayed = delayed_drive_command(
+                    DifferentialDriveCommand(left_speed, right_speed),
+                    command_latency_queue,
+                    DRIVE_REALISM,
+                )
+                realistic = apply_drive_realism(delayed, DRIVE_REALISM, drive_rng)
+                left_speed = realistic.left
+                right_speed = realistic.right
+                left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
 
-        if policy.training_steps % 100 == 0:
+        log_step = policy.training_steps if train_mode else episode_step
+        if log_step == 1 or log_step % 100 == 0 or terminal_reason is not None:
             print(
-                f"step={policy.training_steps if train_mode else episode_step}",
+                f"step={log_step}",
                 f"episode={policy.episodes}",
                 f"state={key}",
                 f"action={action_name}",
@@ -754,10 +1088,14 @@ def main() -> None:
                 f"confidence={profile.confidence:.3f}",
                 f"color={profile.color_name}",
                 f"target={target_color}",
+                f"stage={mission_stage}",
                 f"match={int(profile.matched_target)}",
                 f"locked={int(target_seen)}",
                 f"lock_candidates={target_lock_candidates}",
                 f"handoff={int(target_handoff_open)}",
+                f"branch_guide={sequence_branch_guide_steps_remaining}",
+                f"supervisor_handoff={int(supervisor_handoff)}",
+                f"sequence_event={sequence_event or 'none'}",
                 f"terminal={terminal_reason or 'none'}",
                 f"epsilon={epsilon:.3f}",
                 flush=True,
@@ -775,20 +1113,67 @@ def main() -> None:
             target_lock_candidates = 0
             target_color = normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
             start_pose = make_start_pose(start_rng)
+            command_latency_queue.clear()
+            previous_translation_for_heading = None
             set_left_right_speed(left_motors, right_motors, 0.0, 0.0)
             reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
         else:
             previous_key = key
             previous_action = action
             previous_error = profile.center_error
+        if current_translation is not None and len(current_translation) >= 3:
+            previous_translation_for_heading = (
+                float(current_translation[0]),
+                float(current_translation[1]),
+                float(current_translation[2]),
+            )
 
         if train_mode and policy.training_steps % save_interval == 0:
             policy.save()
 
         if step_log_path:
+            if mission_stage in {"return_start", "returned_start"}:
+                record_goal_center = [start_pose.translation[0], start_pose.translation[1]]
+                record_goal_radius = mission_config.start_return_radius
+            elif record_target_color in mission_config.zones:
+                record_goal_center = list(mission_config.zones[record_target_color].center)
+                record_goal_radius = mission_config.zones[record_target_color].radius
+            else:
+                record_goal_center = None
+                record_goal_radius = None
+            if sequence_progress is None:
+                sequence_colors = []
+                sequence_visited = []
+                sequence_index = None
+                sequence_complete = False
+                sequence_current_reached = False
+                sequence_returned_fork = False
+                sequence_returned_start = False
+            else:
+                sequence_colors = list(sequence_progress.colors)
+                sequence_visited = list(sequence_progress.visited_colors)
+                sequence_index = sequence_progress.index
+                sequence_complete = sequence_progress.complete
+                sequence_current_reached = sequence_progress.current_color_reached
+                sequence_returned_fork = sequence_progress.returned_to_fork
+                sequence_returned_start = sequence_progress.returned_start
+            branch_waypoint = mission_config.branch_waypoints.get(record_target_color)
             step_records.append(
                 {
                     "step": policy.training_steps if train_mode else episode_step,
+                    "mission_mode": "sequence" if sequence_progress is not None else "single",
+                    "mission_stage": mission_stage,
+                    "sequence_colors": sequence_colors,
+                    "sequence_index": sequence_index,
+                    "sequence_visited_colors": sequence_visited,
+                    "sequence_current_color_reached": sequence_current_reached,
+                    "sequence_returned_to_fork": sequence_returned_fork,
+                    "sequence_returned_start": sequence_returned_start,
+                    "sequence_complete": sequence_complete,
+                    "sequence_event": sequence_event,
+                    "supervisor_handoff": supervisor_handoff,
+                    "branch_guide_steps_remaining": sequence_branch_guide_steps_remaining,
+                    "branch_waypoint": list(branch_waypoint) if branch_waypoint is not None else None,
                     "target_color": record_target_color,
                     "visible": profile.visible,
                     "center_error": profile.center_error,
@@ -807,29 +1192,25 @@ def main() -> None:
                     "right_speed": right_speed,
                     "left_speed_scale": LEFT_SPEED_SCALE,
                     "right_speed_scale": RIGHT_SPEED_SCALE,
+                    "motor_deadband": DRIVE_REALISM.motor_deadband,
+                    "speed_noise_std": DRIVE_REALISM.speed_noise_std,
+                    "command_latency_steps": DRIVE_REALISM.command_latency_steps,
                     "translation": current_translation,
                     "terminal_reason": terminal_reason,
-                    "reached_goal": terminal_reason == "reached_goal",
-                    "goal_center": (
-                        list(mission_config.zones[record_target_color].center)
-                        if record_target_color in mission_config.zones
-                        else None
-                    ),
-                    "goal_radius": (
-                        mission_config.zones[record_target_color].radius
-                        if record_target_color in mission_config.zones
-                        else None
-                    ),
+                    "reached_goal": terminal_reason in {"reached_goal", "returned_start"},
+                    "goal_center": record_goal_center,
+                    "goal_radius": record_goal_radius,
                     "goal_reach_clearance": mission_config.goal_reach_clearance,
                     "goal_effective_radius": (
                         max(
                             0.0,
-                            mission_config.zones[record_target_color].radius
-                            - mission_config.goal_reach_clearance,
+                            record_goal_radius - mission_config.goal_reach_clearance,
                         )
-                        if record_target_color in mission_config.zones
+                        if record_goal_radius is not None
                         else None
                     ),
+                    "fork_center": list(mission_config.fork_zone.center),
+                    "fork_radius": mission_config.fork_zone.radius,
                     "start_translation": list(record_start_pose.translation),
                     "start_rotation": list(record_start_pose.rotation),
                     "start_lateral_offset": record_start_pose.lateral_offset,

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import random
 from typing import Protocol
 
 try:
-    from .robot_config import DEFAULT_SAFETY_LIMITS, SafetyLimits
+    from .robot_config import DEFAULT_DRIVE_REALISM, DEFAULT_SAFETY_LIMITS, DriveRealism, SafetyLimits
 except ImportError:  # Webots executes controllers from their own directory.
-    from robot_config import DEFAULT_SAFETY_LIMITS, SafetyLimits
+    from robot_config import DEFAULT_DRIVE_REALISM, DEFAULT_SAFETY_LIMITS, DriveRealism, SafetyLimits
 
 
 ACTION_TURNS = (-1.4, -0.95, -0.48, 0.0, 0.48, 0.95, 1.4)
@@ -76,6 +77,23 @@ def action_to_speeds(
 ) -> tuple[float, float]:
     command = action_to_command(action_index, limits)
     return command.left, command.right
+
+
+def apply_drive_realism(
+    command: DifferentialDriveCommand,
+    realism: DriveRealism = DEFAULT_DRIVE_REALISM,
+    rng: random.Random | None = None,
+) -> DifferentialDriveCommand:
+    left = command.left
+    right = command.right
+    if realism.speed_noise_std > 0.0:
+        source = rng or random
+        left *= max(0.0, 1.0 + source.gauss(0.0, realism.speed_noise_std))
+        right *= max(0.0, 1.0 + source.gauss(0.0, realism.speed_noise_std))
+    if realism.motor_deadband > 0.0:
+        left = 0.0 if abs(left) < realism.motor_deadband else left
+        right = 0.0 if abs(right) < realism.motor_deadband else right
+    return DifferentialDriveCommand(left, right)
 
 
 def parse_target_search_actions(value: str | None) -> dict[str, str]:

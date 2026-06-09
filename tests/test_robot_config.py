@@ -4,10 +4,12 @@ from pathlib import Path
 
 from ders_cizim.controllers.rgb_rl_controller.robot_config import (
     DEFAULT_CAMERA_SENSOR,
+    DEFAULT_DRIVE_REALISM,
     DEFAULT_CAMERA_POSE,
     DEFAULT_SAFETY_LIMITS,
     CameraPose,
     camera_pose_from_env,
+    drive_realism_from_env,
     env_float,
     parse_float_tuple,
 )
@@ -66,6 +68,15 @@ class RobotConfigTests(unittest.TestCase):
         self.assertEqual(int(camera["height"][0]), DEFAULT_CAMERA_SENSOR.height)
         self.assertAlmostEqual(camera["near"][0], DEFAULT_CAMERA_SENSOR.near, places=6)
 
+    def test_rgb_world_contains_real_world_transfer_fixtures(self):
+        world_text = RGB_WORLD.read_text(encoding="utf-8")
+        self.assertIn("basicTimeStep 32", world_text)
+        self.assertIn("ContactProperties", world_text)
+        self.assertIn('name "common_line_low_bump"', world_text)
+        self.assertIn('name "lower_safety_rail"', world_text)
+        self.assertIn("motionBlur 32", world_text)
+        self.assertIn("noise 0.002", world_text)
+
     def test_safety_limits_keep_webots_and_hardware_scales_separate(self):
         self.assertGreater(DEFAULT_SAFETY_LIMITS.webots_max_speed, DEFAULT_SAFETY_LIMITS.webots_base_speed)
         self.assertLessEqual(DEFAULT_SAFETY_LIMITS.hardware_output_limit, 1.0)
@@ -86,6 +97,34 @@ class RobotConfigTests(unittest.TestCase):
         pose = camera_pose_from_env(env)
         self.assertEqual(pose.translation, (-0.1, 0.0, 0.02))
         self.assertEqual(pose.rotation, (0.0, 1.0, 0.0, -1.2))
+
+    def test_default_drive_realism_is_disabled(self):
+        self.assertEqual(DEFAULT_DRIVE_REALISM.motor_deadband, 0.0)
+        self.assertEqual(DEFAULT_DRIVE_REALISM.speed_noise_std, 0.0)
+        self.assertEqual(DEFAULT_DRIVE_REALISM.command_latency_steps, 0)
+
+    def test_drive_realism_from_env_clamps_negative_values(self):
+        old = {}
+        import os
+
+        for name, value in {
+            "MONSTERBORG_RL_MOTOR_DEADBAND": "-0.2",
+            "MONSTERBORG_RL_SPEED_NOISE_STD": "-1",
+            "MONSTERBORG_RL_COMMAND_LATENCY_STEPS": "-3",
+        }.items():
+            old[name] = os.environ.get(name)
+            os.environ[name] = value
+        try:
+            realism = drive_realism_from_env()
+        finally:
+            for name, value in old.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        self.assertEqual(realism.motor_deadband, 0.0)
+        self.assertEqual(realism.speed_noise_std, 0.0)
+        self.assertEqual(realism.command_latency_steps, 0)
 
 
 if __name__ == "__main__":

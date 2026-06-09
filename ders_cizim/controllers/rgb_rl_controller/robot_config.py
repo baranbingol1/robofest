@@ -28,6 +28,13 @@ class SafetyLimits:
     hardware_output_limit: float
 
 
+@dataclass(frozen=True, slots=True)
+class DriveRealism:
+    motor_deadband: float
+    speed_noise_std: float
+    command_latency_steps: int
+
+
 DEFAULT_CAMERA_POSE = CameraPose(
     translation=(-0.13, 0.0, 0.0),
     rotation=(0.0, 1.0, 0.0, -1.2),
@@ -44,6 +51,12 @@ DEFAULT_SAFETY_LIMITS = SafetyLimits(
     webots_base_speed=1.05,
     webots_max_speed=3.0,
     hardware_output_limit=0.65,
+)
+
+DEFAULT_DRIVE_REALISM = DriveRealism(
+    motor_deadband=0.0,
+    speed_noise_std=0.0,
+    command_latency_steps=0,
 )
 
 
@@ -93,5 +106,22 @@ def safety_limits_from_env() -> SafetyLimits:
         hardware_output_limit=env_float(
             "MONSTERBORG_HARDWARE_OUTPUT_LIMIT",
             DEFAULT_SAFETY_LIMITS.hardware_output_limit,
+        ),
+    )
+
+
+def drive_realism_from_env() -> DriveRealism:
+    return DriveRealism(
+        motor_deadband=max(
+            0.0,
+            env_float("MONSTERBORG_RL_MOTOR_DEADBAND", DEFAULT_DRIVE_REALISM.motor_deadband),
+        ),
+        speed_noise_std=max(
+            0.0,
+            env_float("MONSTERBORG_RL_SPEED_NOISE_STD", DEFAULT_DRIVE_REALISM.speed_noise_std),
+        ),
+        command_latency_steps=max(
+            0,
+            env_int("MONSTERBORG_RL_COMMAND_LATENCY_STEPS", DEFAULT_DRIVE_REALISM.command_latency_steps),
         ),
     )

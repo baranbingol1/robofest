@@ -1,0 +1,18 @@
+[project]
+name = "robofest-monsterborg"
+version = "0.1.0"
+description = "Webots and Raspberry Pi control code for a MonsterBorg line-following parkour robot."
+requires-python = ">=3.10"
+dependencies = [
+  "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = []
+pi = [
+  "Pillow>=10.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["ders_cizim*"]
+namespaces = true

@@ -110,6 +110,28 @@ Camera {
         self.assertEqual(env["MONSTERBORG_RL_MAX_STEPS"], "250")
         self.assertEqual(env["MONSTERBORG_RL_QUIT_ON_MISSION_DONE"], "1")
 
+    def test_build_smoke_cases_can_make_sequence_mission_cases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base_world = root / "monsterborg_rgb_rl.wbt"
+            base_world.write_text('"textures/rgb_training_tracks.png"', encoding="utf-8")
+            cases = build_smoke_cases(
+                base_world=base_world,
+                texture_paths=[root / "textures" / "variants" / "rgb_training_tracks_variant_00.png"],
+                target_colors=("red", "green", "blue"),
+                out_dir=root / "artifacts",
+                steps=2400,
+                mission_mode="sequence",
+                color_sequence=("blue", "green", "red"),
+            )
+            self.assertEqual([case.name for case in cases], [
+                "variant_00_sequence_blue-green-red_2400",
+            ])
+            self.assertEqual(cases[0].target_color, "blue")
+            env = env_for_case(cases[0])
+            self.assertEqual(env["MONSTERBORG_RL_MISSION_MODE"], "sequence")
+            self.assertEqual(env["MONSTERBORG_RL_COLOR_SEQUENCE"], "blue,green,red")
+
     def test_build_smoke_cases_can_expand_seeded_randomized_episodes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -186,6 +208,70 @@ Camera {
             with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
                 run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
                 with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.summarize_file", return_value=summary):
+                    result = run_case(Path("webots"), case)
+            self.assertFalse(result["passed_smoke_gate"])
+
+    def test_run_case_sequence_gate_requires_returned_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = SmokeCase(
+                name="variant_00_sequence_red-green-blue_2400",
+                variant_name="variant_00",
+                target_color="red",
+                world_path=root / "world.wbt",
+                log_path=root / "run.json",
+                summary_path=root / "summary.json",
+                steps=2400,
+                mission_mode="sequence",
+                color_sequence=("red", "green", "blue"),
+            )
+            summary = RunSummary(
+                steps=1200,
+                visible_ratio=1.0,
+                matched_target_ratio=0.2,
+                first_target_seen_step=120,
+                final_translation=(-0.42, -0.70, 0.1),
+                final_goal_distance=0.0,
+                final_goal_margin=0.12,
+                travel_distance=4.5,
+                off_board=False,
+                terminal_reason="returned_start",
+                reached_goal=True,
+                timed_out=False,
+                lost_line=False,
+                success=True,
+                returned_start=True,
+                sequence_complete=True,
+                sequence_visited_colors=("red", "green", "blue"),
+            )
+            with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
+                run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+                with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.summarize_file", return_value=summary):
+                    result = run_case(Path("webots"), case)
+            self.assertTrue(result["passed_smoke_gate"])
+
+            missing_home = RunSummary(
+                steps=1200,
+                visible_ratio=1.0,
+                matched_target_ratio=0.2,
+                first_target_seen_step=120,
+                final_translation=(0.38, -0.70, 0.1),
+                final_goal_distance=0.6,
+                final_goal_margin=-0.48,
+                travel_distance=4.0,
+                off_board=False,
+                terminal_reason="reached_goal",
+                reached_goal=True,
+                timed_out=False,
+                lost_line=False,
+                success=True,
+                returned_start=False,
+                sequence_complete=False,
+                sequence_visited_colors=("red", "green", "blue"),
+            )
+            with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
+                run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+                with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.summarize_file", return_value=missing_home):
                     result = run_case(Path("webots"), case)
             self.assertFalse(result["passed_smoke_gate"])
 

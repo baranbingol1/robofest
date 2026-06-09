@@ -42,6 +42,8 @@ class SmokeCase:
     left_speed_scale: float = 1.0
     right_speed_scale: float = 1.0
     camera_noise: float = 0.0
+    mission_mode: str = "single"
+    color_sequence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,26 +120,38 @@ def build_smoke_cases(
     start_heading_jitter: float = 0.0,
     speed_scale_jitter: float = 0.0,
     camera_noise: float = 0.0,
+    mission_mode: str = "single",
+    color_sequence: Sequence[str] = ("red", "green", "blue"),
 ) -> list[SmokeCase]:
     cases: list[SmokeCase] = []
     out_dir.mkdir(parents=True, exist_ok=True)
     pose_options = parse_camera_pose_options(None) if camera_poses is None else list(camera_poses)
     case_rng = random.Random(seed)
+    normalized_mode = "sequence" if mission_mode.strip().lower() in {"sequence", "multi", "all"} else "single"
+    sequence_colors = tuple(color.strip().lower() for color in color_sequence if color.strip())
+    if not sequence_colors:
+        sequence_colors = ("red", "green", "blue")
     for texture_path in texture_paths:
         variant_name = variant_name_from_texture(texture_path)
         texture_url = texture_url_for_world(base_world, texture_path)
         world_path = write_variant_world(base_world, texture_url=texture_url, variant_name=variant_name)
         for pose in pose_options:
-            for target_color in target_colors:
+            case_target_colors = (sequence_colors[0],) if normalized_mode == "sequence" else tuple(target_colors)
+            for target_color in case_target_colors:
                 for episode_index in range(max(1, episodes)):
                     episode_seed = case_rng.randrange(1, 2_000_000_000)
                     speed_jitter = abs(speed_scale_jitter)
                     left_speed_scale = 1.0 + case_rng.uniform(-speed_jitter, speed_jitter)
                     right_speed_scale = 1.0 + case_rng.uniform(-speed_jitter, speed_jitter)
+                    target_label = (
+                        f"sequence_{'-'.join(sequence_colors)}"
+                        if normalized_mode == "sequence"
+                        else target_color
+                    )
                     if pose.name == "nominal" and len(pose_options) == 1:
-                        name = f"{variant_name}_{target_color}_{steps}"
+                        name = f"{variant_name}_{target_label}_{steps}"
                     else:
-                        name = f"{variant_name}_{pose.name}_{target_color}_{steps}"
+                        name = f"{variant_name}_{pose.name}_{target_label}_{steps}"
                     if episodes > 1:
                         name = f"{name}_ep{episode_index:02d}"
                     cases.append(
@@ -160,6 +174,8 @@ def build_smoke_cases(
                             left_speed_scale=left_speed_scale,
                             right_speed_scale=right_speed_scale,
                             camera_noise=max(0.0, camera_noise),
+                            mission_mode=normalized_mode,
+                            color_sequence=sequence_colors if normalized_mode == "sequence" else (),
                         )
                     )
     return cases
@@ -181,8 +197,11 @@ def env_for_case(case: SmokeCase, *, base_env: dict[str, str] | None = None) -> 
             "MONSTERBORG_RL_LEFT_SPEED_SCALE": f"{case.left_speed_scale:.6f}",
             "MONSTERBORG_RL_RIGHT_SPEED_SCALE": f"{case.right_speed_scale:.6f}",
             "MONSTERBORG_RL_QUIT_ON_MISSION_DONE": "1",
+            "MONSTERBORG_RL_MISSION_MODE": case.mission_mode,
         }
     )
+    if case.color_sequence:
+        env["MONSTERBORG_RL_COLOR_SEQUENCE"] = ",".join(case.color_sequence)
     if case.camera_noise > 0:
         env["MONSTERBORG_CAMERA_NOISE"] = str(case.camera_noise)
     if case.camera_translation is not None:
@@ -196,6 +215,7 @@ def find_default_webots() -> Path:
     candidates = [
         Path(r"C:\Program Files\Webots\msys64\mingw64\bin\webots.exe"),
         Path(r"C:\Program Files\Webots\webots.exe"),
+        Path("/Applications/Webots.app/Contents/MacOS/webots"),
         Path("webots"),
     ]
     for candidate in candidates:
@@ -216,16 +236,27 @@ def run_case(webots: Path, case: SmokeCase, *, extra_env: dict[str, str] | None 
         text=True,
     )
     summary = summarize_file(case.log_path)
+    if case.mission_mode == "sequence":
+        passed_smoke_gate = summary.passed_smoke_gate(
+            require_target_lock=True,
+            require_returned_start=True,
+            require_sequence_complete=True,
+            required_sequence_colors=case.color_sequence,
+            min_goal_margin=MIN_GOAL_MARGIN,
+            min_travel_distance=1.2,
+        )
+    else:
+        passed_smoke_gate = summary.passed_smoke_gate(
+            require_goal_reached=True,
+            min_goal_margin=MIN_GOAL_MARGIN,
+        )
     return {
         "case": asdict(case),
         "returncode": completed.returncode,
         "stdout_tail": completed.stdout[-2000:],
         "stderr_tail": completed.stderr[-2000:],
         "summary": asdict(summary),
-        "passed_smoke_gate": summary.passed_smoke_gate(
-            require_goal_reached=True,
-            min_goal_margin=MIN_GOAL_MARGIN,
-        ),
+        "passed_smoke_gate": passed_smoke_gate,
     }
 
 
@@ -244,6 +275,8 @@ def main() -> None:
         default=sorted(Path("ders_cizim/worlds/textures/variants").glob("rgb_training_tracks_variant_*.png")),
     )
     parser.add_argument("--colors", nargs="+", default=["red", "green", "blue"])
+    parser.add_argument("--mission-mode", choices=["single", "sequence"], default="single")
+    parser.add_argument("--sequence", nargs="+", default=["red", "green", "blue"])
     parser.add_argument("--steps", type=int, default=900)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=7)
@@ -276,6 +309,8 @@ def main() -> None:
         start_heading_jitter=args.start_heading_jitter,
         speed_scale_jitter=args.speed_scale_jitter,
         camera_noise=args.camera_noise,
+        mission_mode=args.mission_mode,
+        color_sequence=args.sequence,
     )
     results = run_cases(args.webots, cases)
     for result in results:
@@ -291,6 +326,8 @@ def main() -> None:
             f"distance={summary['travel_distance']:.3f}",
             f"off_board={int(summary['off_board'])}",
             f"terminal={summary['terminal_reason'] or 'none'}",
+            f"returned_start={int(summary.get('returned_start', False))}",
+            f"visited={','.join(summary.get('sequence_visited_colors', [])) or 'none'}",
             f"success={int(summary['success'])}",
             f"pass={int(result['passed_smoke_gate'])}",
         )

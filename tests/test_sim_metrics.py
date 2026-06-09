@@ -107,6 +107,60 @@ class SimMetricsTests(unittest.TestCase):
         self.assertTrue(summary.passed_smoke_gate())
         self.assertFalse(summary.passed_smoke_gate(require_goal_reached=True))
 
+    def test_sequence_summary_requires_all_colors_and_return_start(self):
+        summary = summarize_records(
+            [
+                {
+                    "step": 1,
+                    "visible": True,
+                    "matched_target": True,
+                    "target_seen": True,
+                    "translation": [-0.4, -0.7, 0.1],
+                    "sequence_event": "reached_red",
+                    "sequence_visited_colors": ["red"],
+                },
+                {
+                    "step": 2,
+                    "visible": True,
+                    "matched_target": True,
+                    "target_seen": True,
+                    "translation": [0.2, -0.4, 0.1],
+                    "sequence_event": "reached_green",
+                    "sequence_visited_colors": ["red", "green"],
+                },
+                {
+                    "step": 3,
+                    "visible": True,
+                    "matched_target": True,
+                    "target_seen": True,
+                    "translation": [-0.41, -0.7, 0.1],
+                    "goal_center": [-0.42, -0.7],
+                    "goal_radius": 0.12,
+                    "terminal_reason": "returned_start",
+                    "sequence_visited_colors": ["red", "green", "blue"],
+                    "sequence_returned_start": True,
+                    "sequence_complete": True,
+                },
+            ]
+        )
+        self.assertTrue(summary.returned_start)
+        self.assertTrue(summary.sequence_complete)
+        self.assertEqual(summary.sequence_visited_colors, ("red", "green", "blue"))
+        self.assertTrue(
+            summary.passed_smoke_gate(
+                require_returned_start=True,
+                require_sequence_complete=True,
+                required_sequence_colors=("red", "green", "blue"),
+            )
+        )
+        self.assertFalse(
+            summary.passed_smoke_gate(
+                require_returned_start=True,
+                require_sequence_complete=True,
+                required_sequence_colors=("red", "green", "blue", "orange"),
+            )
+        )
+
     def test_lost_line_terminal_fails_gate(self):
         summary = summarize_records(
             [

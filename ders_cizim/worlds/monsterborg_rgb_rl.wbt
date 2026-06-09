@@ -5,6 +5,16 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 
 WorldInfo {
+  basicTimeStep 32
+  contactProperties [
+    ContactProperties {
+      coulombFriction [
+        1.1
+      ]
+      bounce 0
+      softCFM 0.0001
+    }
+  ]
 }
 Viewpoint {
   orientation -0.3259254821795902 0.15158817921607878 0.9331632247297122 2.3226383307766327
@@ -13,6 +23,17 @@ Viewpoint {
 TexturedBackground {
 }
 TexturedBackgroundLight {
+}
+PointLight {
+  attenuation 0 0 1
+  intensity 1.2
+  location -0.75 -1.15 1.2
+  castShadows TRUE
+}
+PointLight {
+  attenuation 0 0 1
+  intensity 0.8
+  location 0.95 0.55 1.1
 }
 RectangleArena {
   floorSize 2 2
@@ -37,6 +58,121 @@ Solid {
     }
   ]
 }
+Group {
+  children [
+    Solid {
+      translation -0.18 -0.70 0.003
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.82 0.82 0.78
+            roughness 1
+            metalness 0
+          }
+          geometry Box {
+            size 0.24 0.012 0.004
+          }
+        }
+      ]
+      name "common_line_low_bump"
+      boundingObject Box {
+        size 0.24 0.012 0.004
+      }
+    }
+    Solid {
+      translation 0.18 -0.89 0.004
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.55 0.55 0.55
+            roughness 0.9
+            metalness 0
+          }
+          geometry Box {
+            size 0.8 0.01 0.006
+          }
+        }
+      ]
+      name "lower_safety_rail"
+    }
+    Solid {
+      translation 0.18 -0.05 0.004
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.55 0.55 0.55
+            roughness 0.9
+            metalness 0
+          }
+          geometry Box {
+            size 0.45 0.01 0.006
+          }
+        }
+      ]
+      name "upper_safety_rail"
+    }
+    Pose {
+      translation -0.42 -0.91 0.075
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.95 0.7 0.1
+            roughness 0.6
+            metalness 0
+          }
+          geometry Box {
+            size 0.38 0.018 0.13
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.80 -0.55 0.006
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.9 0.05 0.04
+            roughness 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.10 0.10 0.003
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.10 -0.50 0.006
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.05 0.75 0.16
+            roughness 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.10 0.10 0.003
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.32 -0.28 0.006
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.06 0.18 0.9
+            roughness 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.10 0.10 0.003
+          }
+        }
+      ]
+    }
+  ]
+}
 DEF MONSTERBORG_RL Robot {
   translation -0.42 -0.70 0.0993865
   rotation 0.007308191135707109 0.9999732948135465 -1.43672787700961e-06 3.1412758139848846
@@ -49,6 +185,9 @@ DEF MONSTERBORG_RL Robot {
       near 0.02
       width 96
       height 96
+      antiAliasing TRUE
+      motionBlur 32
+      noise 0.002
     }
     Pose {
       translation -0.08 0 0.04
@@ -294,6 +433,37 @@ DEF MONSTERBORG_RL Robot {
         }
       ]
     }
+    Pose {
+      translation 0.01 -0.005 0.075
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.08
+            roughness 0.85
+            metalness 0
+          }
+          geometry Box {
+            size 0.12 0.055 0.025
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.035 0.03 0.097
+      rotation 0 0 1 0.12
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.8 0.18 0.05
+            roughness 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.08 0.012 0.008
+          }
+        }
+      ]
+    }
   ]
   name "monsterborg_rgb_rl"
   boundingObject Pose {
@@ -313,5 +483,3 @@ DEF MONSTERBORG_RL Robot {
   controller "rgb_rl_controller"
   supervisor TRUE
 }
-
-
