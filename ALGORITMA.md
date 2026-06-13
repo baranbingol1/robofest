@@ -133,28 +133,73 @@ katmandir:
 
 ### Q-learning'in Dogru Yeri
 
-Mevcut Q-learning konumu mantik olarak yanlis degil: kamera profilinden
-ayrik durum uretiliyor ve sistem `hard_left`, `left`, `soft_left`, `straight`,
-`soft_right`, `right`, `hard_right` aksiyonlarindan birini seciyor. Yani
-Q-learning dogrudan direksiyon karar katmani olarak denenebilir.
+Arastirma ve mevcut kod degerlendirmesine gore net karar:
 
-Fakat bu projede daha savunulabilir ayrim su olmalidir:
+Q-learning alt seviye teker hizini veya ham direksiyon aksiyonunu ureten ana
+kontrolcu olmamali. En dogru yer, PID/PD cizgi takip kontrolcusunun ustundeki
+gorev/davranis secim katmanidir.
+
+Mevcut Q-learning konumu teknik olarak calisabilir: kamera profilinden ayrik
+durum uretiliyor ve sistem `hard_left`, `left`, `soft_left`, `straight`,
+`soft_right`, `right`, `hard_right` aksiyonlarindan birini seciyor. Fakat bu
+yerlesim, Q-learning'i surekli fiziksel kontrolun dogrudan yerine koyuyor.
+Simulasyonda denenebilir; ama gercek robot icin en savunulabilir mimari degil.
+
+En dogru katman ayrimi:
 
 - Alt seviye cizgi takip: centroid + PID/PD ile deterministik ve kararli
   tutulmali.
-- Q-learning: kesismede dal secimi, cizgi kaybedince arama davranisi, hiz
-  secimi veya PID/PD parametre ayari gibi daha ust kararlar icin kullanilmali.
+- Q-learning: hazir davranislar arasinda secim yapmali.
 
-Neden boyle:
+Bu durumda Q-learning'in aksiyonlari ham `hard_left/right` yerine su tip
+"macro-action" veya "option" secimleri olmali:
+
+- `follow_common_line`: siyah/ortak cizgiyi PID/PD ile takip et.
+- `follow_target_line`: hedef renk maskesini PID/PD ile takip et.
+- `search_left`: hedef cizgi kaybolduysa kontrollu sola arama yap.
+- `search_right`: hedef cizgi kaybolduysa kontrollu saga arama yap.
+- `slow_follow`: kesismede veya dusuk guvende hizi azaltip takip et.
+- `stop_recover`: belirli sure cizgi yoksa dur veya guvenli recovery baslat.
+
+Q-learning durumlari da ham goruntuden degil, ozetlenmis ve ayriklanmis
+gorev sinyallerinden gelmeli:
+
+- `target_color`: red/blue gibi gorev hedefi.
+- `stage`: ortak cizgi, fork yakinlari, hedef dal, kayip cizgi, hedef yakinlari.
+- `center_error_bin`: PID/PD takip hatasinin ayrik hali.
+- `confidence_bin`: maske/centroid guveni.
+- `seen_black`, `seen_red`, `seen_blue`: gorunen cizgi sinyalleri.
+- `matched_target`: aktif hedef maskesi goruluyor mu?
+- `lost_steps_bin`: cizgi kac adimdir kayip?
+
+Bu mimaride motor komutu yine PID/PD'den gelir. Q-learning sadece "hangi
+cizgiyi/stratejiyi takip edecegiz?" sorusuna cevap verir.
+
+Neden bu en dogru yer:
 
 - Cizgi takip surekli ve fiziksel bir kontrol problemidir; PID/PD bu is icin
   standart, aciklanabilir ve kalibre edilebilirdir.
 - Tabular Q-learning, ayrik durum uzayinda calisir. Kamera acisi, isik,
   bant kalinligi ve motor farklari degisince ayni q-table kolayca genelleme
   kaybedebilir.
-- Bu yuzden Q-learning'i "tek ana surucu beyni" yapmak yerine once PID/PD
-  baseline'i saglamlastirip, RL'i karar/iyilestirme katmani yapmak daha dogru
-  mimaridir.
+- Q-learning'in klasik garantileri finite/discrete MDP ve yeterli ziyaret gibi
+  varsayimlara dayanir. Ham kamera ve motor kontrolu bu varsayimlara daha zor
+  uyar; ozetlenmis davranis secimi daha uygundur.
+- Sutton, Precup ve Singh'in "options" yaklasimi da RL'i dusuk seviye motor
+  komutlari yerine zamana yayilan alt davranislar arasinda secmeye uygun bir
+  cerceve olarak tanimlar.
+
+Uygulama sonucu:
+
+- Simdilik mevcut `QPolicy` deney olarak kalabilir.
+- Bir sonraki dogru teknik adim, `heuristic_action()` yerine veya yanina
+  `pid_line_follow(profile)` eklemek.
+- Ardindan Q-learning aksiyon uzayi `ACTION_NAMES` direksiyon setinden
+  davranis setine tasinmali: common takip, target takip, arama, yavas takip,
+  recovery.
+- Egitimde reward, yalnizca anlik merkezde kalmaya degil, hedefe ulasma,
+  dogru dala girme, cizgiyi kaybetmeme ve gereksiz arama/zigzag yapmamaya
+  baglanmali.
 
 ### 2026-06-13 Kisa Egitim Denemesi
 
@@ -213,9 +258,15 @@ Bir degisikligi "saglam" saymak icin minimum kontroller:
 - WPILib Introduction to PID: PID'in yaygin bir feedback controller oldugunu,
   error/setpoint kavramlarini ve P/I/D terimlerini aciklar.
   https://docs.wpilib.org/en/stable/docs/software/advanced-controls/introduction/introduction-to-pid.html
+- Watkins ve Dayan, Q-learning: finite Markov decision process kosullarinda
+  Q-learning'in temel guncelleme ve yakinmasi icin klasik kaynak.
+  https://link.springer.com/article/10.1007/BF00992698
 - Sutton ve Barto, Reinforcement Learning: An Introduction: Q-learning ve
   tabular reinforcement learning icin temel kaynak.
   https://incompleteideas.net/book/the-book-2nd.html
+- Sutton, Precup ve Singh, Between MDPs and semi-MDPs: options yaklasimi,
+  RL'in zamana yayilan alt davranislar arasinda secim yapmasina temel olur.
+  https://www-anw.cs.umass.edu/~barto/courses/cs687/Sutton-Precup-Singh-AIJ99.pdf
 
 ## Sonraki Teknik Borc
 
