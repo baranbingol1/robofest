@@ -48,15 +48,14 @@ class ControlCoreTests(unittest.TestCase):
         self.assertEqual(ACTION_NAMES[heuristic_action(_Profile(center_error=0.7))], "hard_right")
         self.assertEqual(ACTION_NAMES[heuristic_action(_Profile(center_error=0.0))], "straight")
 
-    def test_target_search_action_uses_default_rgb_branch_biases(self):
+    def test_target_search_action_uses_default_red_blue_branch_biases(self):
         self.assertEqual(ACTION_NAMES[target_search_action("red")], "straight")
-        self.assertEqual(ACTION_NAMES[target_search_action("green")], "hard_left")
         self.assertEqual(ACTION_NAMES[target_search_action("blue")], "left")
 
     def test_parse_target_search_actions_allows_environment_override(self):
         mapping = parse_target_search_actions("red=soft_right, green=left, blue=straight")
         self.assertEqual(mapping["red"], "soft_right")
-        self.assertEqual(mapping["green"], "left")
+        self.assertNotIn("green", mapping)
         self.assertEqual(mapping["blue"], "straight")
 
     def test_apply_drive_realism_zeroes_small_deadband_commands(self):

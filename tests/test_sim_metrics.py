@@ -125,8 +125,8 @@ class SimMetricsTests(unittest.TestCase):
                     "matched_target": True,
                     "target_seen": True,
                     "translation": [0.2, -0.4, 0.1],
-                    "sequence_event": "reached_green",
-                    "sequence_visited_colors": ["red", "green"],
+                    "sequence_event": "reached_blue",
+                    "sequence_visited_colors": ["red", "blue"],
                 },
                 {
                     "step": 3,
@@ -137,7 +137,7 @@ class SimMetricsTests(unittest.TestCase):
                     "goal_center": [-0.42, -0.7],
                     "goal_radius": 0.12,
                     "terminal_reason": "returned_start",
-                    "sequence_visited_colors": ["red", "green", "blue"],
+                    "sequence_visited_colors": ["red", "blue"],
                     "sequence_returned_start": True,
                     "sequence_complete": True,
                 },
@@ -145,19 +145,19 @@ class SimMetricsTests(unittest.TestCase):
         )
         self.assertTrue(summary.returned_start)
         self.assertTrue(summary.sequence_complete)
-        self.assertEqual(summary.sequence_visited_colors, ("red", "green", "blue"))
+        self.assertEqual(summary.sequence_visited_colors, ("red", "blue"))
         self.assertTrue(
             summary.passed_smoke_gate(
                 require_returned_start=True,
                 require_sequence_complete=True,
-                required_sequence_colors=("red", "green", "blue"),
+                required_sequence_colors=("red", "blue"),
             )
         )
         self.assertFalse(
             summary.passed_smoke_gate(
                 require_returned_start=True,
                 require_sequence_complete=True,
-                required_sequence_colors=("red", "green", "blue", "orange"),
+                required_sequence_colors=("red", "blue", "orange"),
             )
         )
 
