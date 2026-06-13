@@ -30,6 +30,10 @@ class MissionTests(unittest.TestCase):
         self.assertAlmostEqual(zones["red"].radius, 0.12)
         self.assertEqual(zones["blue"], DEFAULT_GOAL_ZONES["blue"])
 
+    def test_parse_goal_zones_allows_black_run_only_goal(self):
+        zones = parse_goal_zones("black=0.1:0.2:0.3")
+        self.assertEqual(zones["black"], GoalZone("black", (0.1, 0.2), 0.3))
+
     def test_parse_color_sequence_filters_invalid_and_duplicate_colors(self):
         self.assertEqual(parse_color_sequence("green,orange,red,green,blue"), ("red", "blue"))
         self.assertEqual(parse_color_sequence("orange"), tuple(DEFAULT_COLOR_SEQUENCE))

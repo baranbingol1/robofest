@@ -538,7 +538,9 @@ def allowed_option_indexes(
     target_seen: bool,
     should_search_target: bool,
 ) -> tuple[int, ...]:
-    if should_search_target and not target_seen and not profile.matched_target:
+    if should_search_target and not profile.matched_target:
+        if profile.color_name in TARGET_COLORS and profile.color_name != profile.target_color:
+            return (OPTION_SEARCH_TARGET,)
         if profile.visible and profile.confidence >= 0.35 and abs(profile.center_error) <= 0.58:
             return (OPTION_SEARCH_TARGET, OPTION_FOLLOW_LINE)
         return (OPTION_SEARCH_TARGET,)
@@ -884,7 +886,10 @@ def should_search_for_target_branch(
     current_translation: list[float] | None,
     min_x: float,
 ) -> bool:
-    if target_seen or not target_handoff_open or profile.matched_target:
+    wrong_target_color = profile.color_name in TARGET_COLORS and profile.color_name != profile.target_color
+    if not target_handoff_open or profile.matched_target:
+        return False
+    if target_seen and not wrong_target_color:
         return False
     if current_translation is not None and float(current_translation[0]) < min_x:
         return False
@@ -1034,6 +1039,7 @@ def main() -> None:
     target_lock_min_x = env_float("MONSTERBORG_RL_TARGET_LOCK_MIN_X", 0.04)
     target_lock_min_step = env_int("MONSTERBORG_RL_TARGET_LOCK_MIN_STEP", 0)
     branch_search_min_x = env_float("MONSTERBORG_RL_BRANCH_SEARCH_MIN_X", 0.30)
+    target_commit_steps = max(0, env_int("MONSTERBORG_RL_TARGET_COMMIT_STEPS", 110))
     branch_guide_steps = max(0, env_int("MONSTERBORG_RL_BRANCH_GUIDE_STEPS", 220))
     supervisor_handoff_enabled = os.getenv("MONSTERBORG_RL_SUPERVISOR_HANDOFF", "1").strip().lower() not in {
         "0",
@@ -1090,6 +1096,7 @@ def main() -> None:
     previous_error = 0.0
     target_seen = False
     target_lock_candidates = 0
+    target_commit_steps_remaining = 0
     episode_step = 0
     lost_steps = 0
     captured_debug_frame = False
@@ -1175,6 +1182,8 @@ def main() -> None:
             target_lock_candidates = 0
         if target_lock_candidates >= 2:
             target_seen = True
+            if target_color in target_search_actions:
+                target_commit_steps_remaining = target_commit_steps
             sequence_branch_guide_steps_remaining = 0
         should_capture = (
             bool(capture_path)
@@ -1214,12 +1223,24 @@ def main() -> None:
         episode_step += 1
         policy.training_steps += 1 if train_mode else 0
         lost_steps = 0 if profile.visible else lost_steps + 1
-        should_search_target = target_color in target_search_actions and should_search_for_target_branch(
-            profile,
-            target_seen=target_seen,
-            target_handoff_open=target_handoff_open,
-            current_translation=current_translation,
-            min_x=branch_search_min_x,
+        commit_search_active = (
+            target_color in target_search_actions
+            and target_seen
+            and not profile.matched_target
+            and target_commit_steps_remaining > 0
+        )
+        should_search_target = (
+            commit_search_active
+            or (
+                target_color in target_search_actions
+                and should_search_for_target_branch(
+                    profile,
+                    target_seen=target_seen,
+                    target_handoff_open=target_handoff_open,
+                    current_translation=current_translation,
+                    min_x=branch_search_min_x,
+                )
+            )
         )
         if policy_layer == POLICY_LAYER_OPTION:
             key = option_state_key(
@@ -1302,6 +1323,7 @@ def main() -> None:
                     sequence_event = f"returned_fork_after_{completed_color}"
                     target_seen = False
                     target_lock_candidates = 0
+                    target_commit_steps_remaining = 0
                     previous_error = 0.0
                     lost_steps = 0
                     command_latency_queue.clear()
@@ -1495,6 +1517,7 @@ def main() -> None:
             previous_error = 0.0
             target_seen = False
             target_lock_candidates = 0
+            target_commit_steps_remaining = 0
             target_color = normalize_target_color(os.getenv("MONSTERBORG_RL_START_COLOR"), train_mode=train_mode)
             start_pose = make_start_pose(start_rng)
             command_latency_queue.clear()
@@ -1511,6 +1534,8 @@ def main() -> None:
                 float(current_translation[1]),
                 float(current_translation[2]),
             )
+        if target_commit_steps_remaining > 0:
+            target_commit_steps_remaining -= 1
 
         if train_mode and policy.training_steps % save_interval == 0:
             policy.save()
@@ -1570,6 +1595,7 @@ def main() -> None:
                     "target_seen": target_seen,
                     "target_lock_candidate": target_lock_candidate,
                     "target_lock_candidates": target_lock_candidates,
+                    "target_commit_steps_remaining": target_commit_steps_remaining,
                     "target_handoff_open": target_handoff_open,
                     "policy_layer": policy_layer,
                     "policy_action": policy_action_name,
