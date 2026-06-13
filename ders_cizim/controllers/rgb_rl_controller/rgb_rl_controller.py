@@ -104,6 +104,7 @@ COLOR_CODES = {
 POLICY_LAYER_DIRECT = "direct"
 POLICY_LAYER_OPTION = "option"
 POLICY_LAYERS = {POLICY_LAYER_DIRECT, POLICY_LAYER_OPTION}
+RUN_ONLY_CAMERA_TARGETS = (*TARGET_COLORS, "black")
 
 OPTION_NAMES = (
     "follow_line",
@@ -160,6 +161,8 @@ def normalize_target_color(value: str | None, *, train_mode: bool) -> str:
         return random.choice(TARGET_COLORS)
     if requested in TARGET_COLORS:
         return requested
+    if not train_mode and requested == "black":
+        return "black"
     return "red"
 
 
@@ -1145,7 +1148,7 @@ def main() -> None:
         mission_stage = sequence_progress.stage if sequence_progress is not None else "single"
         returning_start = mission_stage == "return_start"
         returning_to_fork = mission_stage == "return_fork"
-        active_camera_target = target_color if target_color in TARGET_COLORS else "red"
+        active_camera_target = target_color if target_color in RUN_ONLY_CAMERA_TARGETS else "red"
         position_gate_open = (
             True if current_translation is None else float(current_translation[0]) >= target_lock_min_x
         )

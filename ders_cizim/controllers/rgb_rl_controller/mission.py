@@ -68,6 +68,7 @@ DEFAULT_GOAL_ZONES = {
     "red": GoalZone("red", (0.80, 0.36), 0.18),
     "blue": GoalZone("blue", (-0.72, 0.52), 0.18),
 }
+RUN_ONLY_GOAL_COLORS = (*TARGET_COLORS, "black")
 DEFAULT_COLOR_SEQUENCE = ("red", "blue")
 DEFAULT_FORK_ZONE = GoalZone("fork", (0.38, -0.62), 0.20)
 DEFAULT_BRANCH_WAYPOINTS = {
@@ -227,7 +228,7 @@ def parse_goal_zones(value: str | None) -> dict[str, GoalZone]:
         if not sep:
             continue
         color = color.strip().lower()
-        if color not in TARGET_COLORS:
+        if color not in RUN_ONLY_GOAL_COLORS:
             continue
         parts = spec.replace(":", " ").split()
         if len(parts) != 3:
