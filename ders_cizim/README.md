@@ -99,6 +99,19 @@ $env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_red_4600_summa
 
 Change `MONSTERBORG_RL_START_COLOR` to `blue` to run the blue branch.
 
+The generated black symbolic world is a run-only validation case for following the black route without red/blue branch selection:
+
+```powershell
+$env:MONSTERBORG_RL_START_COLOR='black'
+$env:MONSTERBORG_RL_GOAL_ZONES='black=0.80:0.36:0.18'
+$env:MONSTERBORG_RL_MAX_STEPS='4600'
+$env:MONSTERBORG_RL_STEP_LOG_PATH='ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600.json'
+$env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600_summary.json'
+& 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\_generated_photo_symbolic_monsterborg_rgb_rl.wbt'
+```
+
+`black` is intentionally not sampled by training mode or sequence mode; it is only for direct smoke validation of the symbolic black texture.
+
 Run the red/blue mission matrix with randomized starts:
 
 ```powershell
@@ -222,7 +235,10 @@ The default Webots course uses a common start line and then branches to red or b
 
 ```powershell
 $env:MONSTERBORG_RL_TARGET_SEARCH_ACTIONS='blue=left,red=straight'
+$env:MONSTERBORG_RL_TARGET_COMMIT_STEPS='110'
 ```
+
+After the selected target color is first locked, the controller keeps the target-search action available for a short commit window. This prevents a brief fork detection from handing control back to the wrong colored branch before the robot has physically committed.
 
 ## Track Variants
 

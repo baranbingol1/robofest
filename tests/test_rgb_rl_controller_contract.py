@@ -30,6 +30,10 @@ class RgbRlControllerContractTests(unittest.TestCase):
     def test_dim_low_saturation_pixels_still_classify_as_black(self):
         self.assertEqual(rgb_rl_controller.detect_color_name((18.0, 19.0, 24.0)), "black")
 
+    def test_black_target_is_run_only(self):
+        self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=False), "black")
+        self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=True), "red")
+
     def test_speed_scaling_is_applied_before_motor_commands(self):
         old_left = rgb_rl_controller.LEFT_SPEED_SCALE
         old_right = rgb_rl_controller.RIGHT_SPEED_SCALE
@@ -118,6 +122,37 @@ class RgbRlControllerContractTests(unittest.TestCase):
         self.assertEqual(rgb_rl_controller.OPTION_NAMES[option], "search_target")
         self.assertEqual(control_core.ACTION_NAMES[action], "left")
         self.assertLess(speed_scale, 1.0)
+
+    def test_target_search_resumes_after_lock_when_wrong_branch_color_is_visible(self):
+        profile = rgb_rl_controller.RgbProfile(
+            visible=True,
+            center_error=0.1,
+            confidence=1.0,
+            color_name="red",
+            target_color="blue",
+            matched_target=False,
+            line_width_ratio=0.08,
+            rgb_balance=(180.0, 30.0, 30.0),
+            threshold=24.0,
+        )
+
+        self.assertTrue(
+            rgb_rl_controller.should_search_for_target_branch(
+                profile,
+                target_seen=True,
+                target_handoff_open=True,
+                current_translation=[0.40, -0.60, 0.10],
+                min_x=0.30,
+            )
+        )
+        self.assertEqual(
+            rgb_rl_controller.allowed_option_indexes(
+                profile,
+                target_seen=True,
+                should_search_target=True,
+            ),
+            (rgb_rl_controller.OPTION_SEARCH_TARGET,),
+        )
 
     def test_option_state_key_marks_search_stage(self):
         profile = rgb_rl_controller.RgbProfile(
