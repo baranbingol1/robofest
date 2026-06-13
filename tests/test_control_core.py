@@ -31,7 +31,7 @@ class ControlCoreTests(unittest.TestCase):
         self.assertEqual(clipped.left, 3.0)
         self.assertEqual(clipped.right, -3.0)
 
-    def test_drive_command_normalizes_for_thunderborg_output(self):
+    def test_drive_command_normalizes_for_hardware_output(self):
         command = DifferentialDriveCommand(left=3.0, right=-1.5)
         normalized = command.normalized(DEFAULT_SAFETY_LIMITS.webots_max_speed)
         self.assertAlmostEqual(normalized.left, 1.0)

@@ -15,7 +15,7 @@ The controller now uses shared modules:
 - `robot_config.py`: camera pose, camera sensor settings, speed limits, environment parsing.
 - `sim_metrics.py`: repeatable smoke-run summaries with goal-success gates.
 - `vision_adapter.py`: Webots-like adapter for RGB arrays from Pi camera frames.
-- `hardware_pi.py`: lazy Raspberry Pi camera and ThunderBorg motor adapters.
+- `hardware_pi.py`: lazy Raspberry Pi camera and TB6612 GPIO motor adapters.
 
 ## Algorithm
 
@@ -254,7 +254,7 @@ The Pi path should use the same perception/control contract:
 2. Wrap each frame with `vision_adapter.RgbArrayCamera`.
 3. Analyze it with `rgb_rl_controller.analyze_rgb_camera(..., RgbArrayCameraApi, target_color, previous_error)`.
 4. Convert policy actions with `control_core.action_to_command`.
-5. Send clipped commands through `hardware_pi.ThunderBorgMotorSink`.
+5. Send clipped commands through `hardware_pi.TB6612GPIOMotorSink`.
 
 Start conservatively:
 
@@ -280,13 +280,24 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-Raspberry Pi setup should also install the OS-provided camera stack and the PiBorg/ThunderBorg Python library. The project package intentionally keeps those hardware libraries lazy so laptop tests can run without them.
+Raspberry Pi setup should also install the OS-provided camera stack and an `RPi.GPIO`-compatible GPIO library. The project package intentionally keeps those hardware libraries lazy so laptop tests can run without them.
+
+The TB6612 code uses BCM GPIO numbers, matching this wiring:
+
+| Motor | Driver channel | PWM GPIO | IN1 GPIO | IN2 GPIO | STBY GPIO |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Right rear | Driver #1 A01-A02 | 12 | 5 | 6 | 21 |
+| Right front | Driver #1 B01-B02 | 13 | 16 | 20 | 21 |
+| Left front | Driver #2 A01-A02 | 18 | 23 | 24 | 27 |
+| Left rear | Driver #2 B01-B02 | 19 | 25 | 26 | 27 |
+
+Power wiring stays outside the code: TB6612 `VM` goes to main power `IN+`, `VCC` goes to Pi `3.3V`, and every driver/Pi ground must share the same `GND`/`IN-` line. Do not let `VM` touch `VCC`.
 
 On the physical robot, verify these before autonomous driving:
 
 - The camera frame sees line plus floor, not only line.
 - `line_width_ratio` is roughly `0.10` to `0.25` on straight segments.
-- Left/right motor signs match Webots.
+- Left/right motor signs match Webots. If one motor runs backward, swap that motor's two output wires or reverse its `TB6612MotorSigns` entry in code.
 - Battery voltage does not sag enough to change steering.
 - A manual stop path is available before enabling closed-loop motion.
 

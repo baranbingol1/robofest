@@ -19,7 +19,7 @@ try:
         parse_target_search_actions,
         target_search_action,
     )
-    from .hardware_pi import NullMotorSink, PiCameraFrameSource, ThunderBorgMotorSink
+    from .hardware_pi import NullMotorSink, PiCameraFrameSource, TB6612GPIOMotorSink
     from .hardware_probe import analyze_frame, summarize_profile_records
     from .robot_config import safety_limits_from_env
 except ImportError:
@@ -31,7 +31,7 @@ except ImportError:
         parse_target_search_actions,
         target_search_action,
     )
-    from hardware_pi import NullMotorSink, PiCameraFrameSource, ThunderBorgMotorSink
+    from hardware_pi import NullMotorSink, PiCameraFrameSource, TB6612GPIOMotorSink
     from hardware_probe import analyze_frame, summarize_profile_records
     from robot_config import safety_limits_from_env
 
@@ -264,6 +264,9 @@ def run_hardware_loop(
         stopped_reason = "keyboard_interrupt"
     finally:
         motor_sink.stop()
+        close_motor = getattr(motor_sink, "close", None)
+        if callable(close_motor):
+            close_motor()
         frame_source.close()
 
     summary = build_summary(
@@ -297,7 +300,7 @@ def main() -> None:
     parser.add_argument("--camera-ready-warmup-frames", type=int, default=20)
     parser.add_argument("--allow-uncalibrated-camera", action="store_true")
     parser.add_argument("--hardware-output-limit", type=float, default=None)
-    parser.add_argument("--armed", action="store_true", help="Actually command ThunderBorg motors")
+    parser.add_argument("--armed", action="store_true", help="Actually command TB6612 GPIO motors")
     args = parser.parse_args()
 
     limits = safety_limits_from_env()
@@ -320,7 +323,7 @@ def main() -> None:
         frame_source = StaticImageFrameSource(load_image(args.image))
     else:
         frame_source = PiCameraFrameSource()
-    motor_sink = ThunderBorgMotorSink(limits) if args.armed else NullMotorSink()
+    motor_sink = TB6612GPIOMotorSink(limits) if args.armed else NullMotorSink()
     summary = run_hardware_loop(config, frame_source, motor_sink)
     print(json.dumps(asdict(summary), sort_keys=True))
 
