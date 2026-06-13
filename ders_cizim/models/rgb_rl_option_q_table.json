@@ -1,0 +1,406 @@
+{
+  "actions": [
+    {
+      "index": 0,
+      "name": "follow_line"
+    },
+    {
+      "index": 1,
+      "name": "search_target"
+    },
+    {
+      "index": 2,
+      "name": "slow_follow"
+    }
+  ],
+  "episodes": 13,
+  "format": "monsterborg-rgb-option-q-v1",
+  "q_table": {
+    "stagecommon|e-1|c2|w1|rgb1|target2|match0|lost0|t0": [
+      13.141394418958347,
+      1.6565161049032406,
+      5.447300957728341
+    ],
+    "stagecommon|e-1|c2|w1|rgb1|target4|match0|lost0|t0": [
+      3.975229594811357,
+      9.826737233877617,
+      4.28876864683013
+    ],
+    "stagecommon|e-1|c2|w2|rgb1|target2|match0|lost0|t0": [
+      10.540677935466888,
+      4.416377027224722,
+      3.9721115556491773
+    ],
+    "stagecommon|e-1|c2|w2|rgb1|target4|match0|lost0|t0": [
+      4.859449791949208,
+      5.428658341575055,
+      10.444096304356613
+    ],
+    "stagecommon|e0|c2|w1|rgb1|target2|match0|lost0|t0": [
+      11.961566421469007,
+      8.560536509877549,
+      9.26708077150719
+    ],
+    "stagecommon|e0|c2|w1|rgb1|target2|match0|lost0|t1": [
+      1.4964188756397172,
+      0.0,
+      0.0
+    ],
+    "stagecommon|e0|c2|w1|rgb1|target4|match0|lost0|t0": [
+      10.385954676929003,
+      8.884820813503717,
+      9.101794201718489
+    ],
+    "stagecommon|e0|c2|w1|rgb1|target4|match0|lost0|t1": [
+      0.0,
+      2.6963026762394766,
+      0.0
+    ],
+    "stagecommon|e0|c2|w2|rgb1|target2|match0|lost0|t0": [
+      11.791450004993505,
+      11.400874276221543,
+      11.58745822398889
+    ],
+    "stagecommon|e0|c2|w2|rgb1|target4|match0|lost0|t0": [
+      12.195789900597815,
+      10.492984200945827,
+      11.213515188653655
+    ],
+    "stagecommon|e1|c2|w1|rgb1|target2|match0|lost0|t0": [
+      10.373027494911678,
+      0.0,
+      2.1332845463485226
+    ],
+    "stagecommon|e1|c2|w1|rgb1|target4|match0|lost0|t0": [
+      10.500847211181197,
+      2.4071689248450534,
+      1.25942054557225
+    ],
+    "stagecommon|e1|c2|w2|rgb1|target4|match0|lost0|t0": [
+      9.431961558174352,
+      0.0,
+      0.0
+    ],
+    "stagelost|e-1|c0|w0|rgb0|target2|match0|lost1|t0": [
+      -1.076783344,
+      -1.076783344,
+      -1.4307820939251843
+    ],
+    "stagelost|e-1|c0|w0|rgb0|target2|match0|lost2|t0": [
+      -2.77323812449213,
+      -2.77323812449213,
+      -3.221922381043349
+    ],
+    "stagelost|e-1|c0|w0|rgb0|target2|match0|lost3|t0": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "stagelost|e-1|c0|w0|rgb0|target2|match1|lost1|t0": [
+      0.0,
+      0.0,
+      0.4442881434979334
+    ],
+    "stagelost|e-2|c0|w0|rgb0|target2|match1|lost1|t0": [
+      -1.4257083771840002,
+      -1.2428106954840172,
+      -1.0869240756931102
+    ],
+    "stagelost|e-2|c0|w0|rgb0|target2|match1|lost2|t0": [
+      -0.018835247191904825,
+      -0.36400000000000005,
+      -0.717519433574422
+    ],
+    "stagesearch|e0|c2|w1|rgb1|target4|match0|lost0|t-1": [
+      0.0,
+      0.2916444552906914,
+      0.0
+    ],
+    "stagesearch|e0|c2|w1|rgb1|target4|match0|lost0|t0": [
+      0.0,
+      4.611720766751814,
+      0.0
+    ],
+    "stagesearch|e0|c2|w2|rgb1|target4|match0|lost0|t-1": [
+      0.0,
+      1.4179732842723558,
+      0.0
+    ],
+    "stagesearch|e0|c2|w2|rgb1|target4|match0|lost0|t0": [
+      1.6213129664173354,
+      15.25388711679345,
+      2.4122864346018673
+    ],
+    "stagesearch|e1|c2|w1|rgb1|target4|match0|lost0|t0": [
+      1.6210006991314738,
+      4.756517207581472,
+      0.0
+    ],
+    "stagesearch|e1|c2|w2|rgb1|target4|match0|lost0|t0": [
+      3.910942913626732,
+      12.945802473224083,
+      3.4644870610392013
+    ],
+    "stagesearch|e1|c2|w2|rgb2|target4|match0|lost0|t0": [
+      0.0,
+      3.8759212325805072,
+      0.0
+    ],
+    "stagesearch|e1|c2|w2|rgb2|target4|match0|lost0|t1": [
+      0.0,
+      1.8147892739744025,
+      0.0
+    ],
+    "stagesearch|e2|c2|w2|rgb2|target4|match0|lost0|t0": [
+      0.0,
+      0.386221149490051,
+      0.0
+    ],
+    "stagetarget|e-1|c0|w0|rgb2|target2|match1|lost0|t0": [
+      7.014334505651982,
+      12.125893088058548,
+      19.517730704141808
+    ],
+    "stagetarget|e-1|c1|w0|rgb2|target2|match1|lost0|t0": [
+      10.93087782725533,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w0|rgb2|target2|match1|lost0|t-1": [
+      10.11834972704507,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w0|rgb2|target2|match1|lost0|t0": [
+      17.315723155674114,
+      17.784401184621633,
+      18.05216461122506
+    ],
+    "stagetarget|e-1|c2|w1|rgb2|target2|match1|lost0|t-1": [
+      0.3189147939774024,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w1|rgb2|target2|match1|lost0|t0": [
+      15.342266318768097,
+      1.9726492338832855,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w1|rgb2|target2|match1|lost0|t1": [
+      0.8483313220260489,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w2|rgb2|target2|match1|lost0|t0": [
+      19.679643446762384,
+      19.527628757655858,
+      18.547905387479435
+    ],
+    "stagetarget|e-1|c2|w2|rgb2|target2|match1|lost0|t1": [
+      2.8687187063267863,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-1|c2|w2|rgb4|target4|match1|lost0|t0": [
+      2.8431365522679912,
+      2.7812546108465304,
+      20.336033372889325
+    ],
+    "stagetarget|e-2|c0|w0|rgb2|target2|match1|lost0|t0": [
+      0.0,
+      0.22033619538261928,
+      3.1957412061729267
+    ],
+    "stagetarget|e-2|c1|w0|rgb2|target2|match1|lost0|t0": [
+      4.521358280209316,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-2|c2|w0|rgb2|target2|match1|lost0|t0": [
+      5.887770723191844,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-2|c2|w0|rgb2|target2|match1|lost0|t1": [
+      0.41002109121548114,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-2|c2|w0|rgb4|target4|match1|lost0|t-1": [
+      0.0,
+      0.0,
+      0.7619024114622788
+    ],
+    "stagetarget|e-2|c2|w0|rgb4|target4|match1|lost0|t0": [
+      5.339978188040592,
+      1.8883311848687292,
+      17.68954049350869
+    ],
+    "stagetarget|e-2|c2|w1|rgb2|target2|match1|lost0|t0": [
+      0.0,
+      0.0,
+      2.498524120467006
+    ],
+    "stagetarget|e-2|c2|w1|rgb4|target4|match1|lost0|t0": [
+      3.6455896217946213,
+      3.8159324215884194,
+      17.387026342152712
+    ],
+    "stagetarget|e-2|c2|w2|rgb2|target2|match1|lost0|t0": [
+      16.73726966352777,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e-2|c2|w2|rgb4|target4|match1|lost0|t0": [
+      7.593573032822049,
+      9.16593697982338,
+      18.332340729128262
+    ],
+    "stagetarget|e-3|c1|w0|rgb4|target4|match1|lost0|t-1": [
+      0.0,
+      0.0,
+      0.24372067768427888
+    ],
+    "stagetarget|e-3|c1|w0|rgb4|target4|match1|lost0|t0": [
+      0.0,
+      0.0,
+      2.332118427046699
+    ],
+    "stagetarget|e-3|c2|w0|rgb4|target4|match1|lost0|t-1": [
+      0.0,
+      0.0,
+      6.684098595675389
+    ],
+    "stagetarget|e-3|c2|w0|rgb4|target4|match1|lost0|t0": [
+      8.262781820595158,
+      10.933033258991296,
+      18.458218075083863
+    ],
+    "stagetarget|e-3|c2|w1|rgb2|target2|match1|lost0|t0": [
+      0.0,
+      0.0,
+      5.286441309080861
+    ],
+    "stagetarget|e-3|c2|w1|rgb4|target4|match1|lost0|t0": [
+      11.455600520827463,
+      9.358963368866856,
+      18.658783892982918
+    ],
+    "stagetarget|e-3|c2|w2|rgb4|target4|match1|lost0|t0": [
+      0.0,
+      0.0,
+      3.84823077948219
+    ],
+    "stagetarget|e0|c2|w0|rgb2|target2|match1|lost0|t-1": [
+      8.089321849291764,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e0|c2|w0|rgb2|target2|match1|lost0|t0": [
+      15.740745305895986,
+      0.0,
+      5.29027804475462
+    ],
+    "stagetarget|e0|c2|w0|rgb2|target2|match1|lost0|t1": [
+      4.010052035699978,
+      0.9054567919264408,
+      0.0
+    ],
+    "stagetarget|e0|c2|w1|rgb2|target2|match1|lost0|t0": [
+      11.720175019020752,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e0|c2|w1|rgb2|target2|match1|lost0|t1": [
+      1.7990485907362126,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e0|c2|w2|rgb2|target2|match1|lost0|t0": [
+      20.822116953554303,
+      20.11947546494179,
+      20.10987901023444
+    ],
+    "stagetarget|e0|c2|w2|rgb4|target4|match1|lost0|t0": [
+      21.78722057348532,
+      21.27563822555412,
+      21.19337821640288
+    ],
+    "stagetarget|e1|c2|w0|rgb2|target2|match1|lost0|t-1": [
+      1.6453204458128843,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e1|c2|w0|rgb2|target2|match1|lost0|t0": [
+      14.754695946889703,
+      4.791442366005508,
+      0.0
+    ],
+    "stagetarget|e1|c2|w0|rgb2|target2|match1|lost0|t1": [
+      6.218974904782353,
+      0.706735635522859,
+      0.0
+    ],
+    "stagetarget|e1|c2|w1|rgb2|target2|match1|lost0|t-1": [
+      5.6546613257677585,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e1|c2|w1|rgb2|target2|match1|lost0|t0": [
+      19.078097825685436,
+      17.190871042801906,
+      16.471589876940808
+    ],
+    "stagetarget|e1|c2|w1|rgb2|target2|match1|lost0|t1": [
+      0.9311621049662082,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e1|c2|w2|rgb2|target2|match1|lost0|t0": [
+      19.369859073358064,
+      15.882531742018358,
+      18.171659831481417
+    ],
+    "stagetarget|e1|c2|w2|rgb4|target4|match1|lost0|t0": [
+      18.792459925450075,
+      17.34044589990056,
+      18.911576519695092
+    ],
+    "stagetarget|e2|c2|w0|rgb2|target2|match1|lost0|t-1": [
+      2.1091721935036127,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e2|c2|w0|rgb2|target2|match1|lost0|t0": [
+      0.0,
+      0.0,
+      1.449125571274863
+    ],
+    "stagetarget|e2|c2|w0|rgb2|target2|match1|lost0|t1": [
+      0.24703770823433896,
+      0.0,
+      0.0
+    ],
+    "stagetarget|e2|c2|w1|rgb2|target2|match1|lost0|t0": [
+      15.499968811187188,
+      7.6651436670888655,
+      7.085251039130879
+    ],
+    "stagetarget|e2|c2|w2|rgb2|target2|match1|lost0|t0": [
+      14.869230072235455,
+      0.46203583682301186,
+      0.48235735010654035
+    ],
+    "stagetarget|e2|c2|w2|rgb4|target4|match1|lost0|t0": [
+      12.74761950226962,
+      2.7793262952808857,
+      0.0
+    ],
+    "stagetarget|e3|c2|w1|rgb2|target2|match1|lost0|t0": [
+      0.0,
+      0.4884184554743491,
+      4.144351937304614
+    ]
+  },
+  "training_steps": 30000
+}
