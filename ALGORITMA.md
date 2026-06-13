@@ -131,6 +131,64 @@ katmandir:
 - Bu yaklasim deney icin uygundur; fakat gercek robotta ilk guvenilir baseline
   olarak PID/PD cizgi takip tercih edilmelidir.
 
+### Q-learning'in Dogru Yeri
+
+Mevcut Q-learning konumu mantik olarak yanlis degil: kamera profilinden
+ayrik durum uretiliyor ve sistem `hard_left`, `left`, `soft_left`, `straight`,
+`soft_right`, `right`, `hard_right` aksiyonlarindan birini seciyor. Yani
+Q-learning dogrudan direksiyon karar katmani olarak denenebilir.
+
+Fakat bu projede daha savunulabilir ayrim su olmalidir:
+
+- Alt seviye cizgi takip: centroid + PID/PD ile deterministik ve kararli
+  tutulmali.
+- Q-learning: kesismede dal secimi, cizgi kaybedince arama davranisi, hiz
+  secimi veya PID/PD parametre ayari gibi daha ust kararlar icin kullanilmali.
+
+Neden boyle:
+
+- Cizgi takip surekli ve fiziksel bir kontrol problemidir; PID/PD bu is icin
+  standart, aciklanabilir ve kalibre edilebilirdir.
+- Tabular Q-learning, ayrik durum uzayinda calisir. Kamera acisi, isik,
+  bant kalinligi ve motor farklari degisince ayni q-table kolayca genelleme
+  kaybedebilir.
+- Bu yuzden Q-learning'i "tek ana surucu beyni" yapmak yerine once PID/PD
+  baseline'i saglamlastirip, RL'i karar/iyilestirme katmani yapmak daha dogru
+  mimaridir.
+
+### 2026-06-13 Kisa Egitim Denemesi
+
+Bu makinede Webots ile kisa bir egitim smoke denemesi calistirildi. Repo
+kirlenmesin diye q-table ve loglar `/tmp` altina yazildi:
+
+```bash
+MONSTERBORG_RL_MODE=train \
+MONSTERBORG_RL_START_COLOR=random \
+MONSTERBORG_RL_TRAIN_STEPS=600 \
+MONSTERBORG_RL_EPISODE_STEPS=300 \
+MONSTERBORG_RL_SAVE_INTERVAL=300 \
+MONSTERBORG_RL_Q_TABLE=/tmp/robofest_train_probe_q_table.json \
+MONSTERBORG_RL_STEP_LOG_PATH=/tmp/robofest_train_probe_steps.json \
+MONSTERBORG_RL_SUMMARY_PATH=/tmp/robofest_train_probe_summary.json \
+/Applications/Webots.app/Contents/MacOS/webots --mode=fast --stdout --stderr --minimize \
+  ders_cizim/worlds/monsterborg_rgb_rl.wbt
+```
+
+Sonuc:
+
+- Webots egitim modu calisti ve q-table kaydedildi.
+- `training_steps=600`
+- `episodes=2`
+- `states=7`
+- `nonzero_states=7`
+- Bu kisa deneme hedefe ulasmadi: `terminal_reason=timeout`,
+  `success=false`, `matched_target_ratio=0.0`.
+
+Yorum: Su anda egitim teknik olarak baslatilabilir. Ancak 600 step sadece
+"egitim mekanizmasi calisiyor mu" kontroludur; iyi bir q-table uretmez.
+Gercek egitim icin daha uzun sure, varyant parkurlar, random start, motor
+gurultusu/latency ve egitim sonrasi ayri test matrisi gerekir.
+
 ## Kabul Kriterleri
 
 Bir degisikligi "saglam" saymak icin minimum kontroller:
