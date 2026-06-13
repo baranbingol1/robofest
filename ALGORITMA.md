@@ -191,15 +191,23 @@ Neden bu en dogru yer:
 
 Uygulama sonucu:
 
-- Simdilik mevcut `QPolicy` deney olarak kalabilir.
-- Bir sonraki dogru teknik adim, `heuristic_action()` yerine veya yanina
-  `pid_line_follow(profile)` eklemek.
-- Ardindan Q-learning aksiyon uzayi `ACTION_NAMES` direksiyon setinden
-  davranis setine tasinmali: common takip, target takip, arama, yavas takip,
-  recovery.
+- Q-learning artik varsayilan olarak option katmaninda calisir.
+- Option aksiyonlari `follow_line`, `search_target`, `slow_follow` olarak
+  sinirlidir; ham teker hizini dogrudan Q-learning secmez.
+- Q-table yoksa veya state bilinmiyorsa deterministic fallback kullanilir.
+- Run modunda varsayilan paketlenmis model:
+  `ders_cizim/models/rgb_rl_option_q_table.json`.
+- Train modunda varsayilan cikti hala ignored artifacts dizinine yazilir;
+  boylece yanlislikla paketlenmis model ezilmez.
 - Egitimde reward, yalnizca anlik merkezde kalmaya degil, hedefe ulasma,
   dogru dala girme, cizgiyi kaybetmeme ve gereksiz arama/zigzag yapmamaya
-  baglanmali.
+  baglidir.
+- Guvenlik maskesi dusuk guven, kayip cizgi ve buyuk hata durumlarinda
+  Q-learning'in fallback davranisini ezmesini engeller.
+- Kirmizi hedefte ayni anda iki ayrik kirmizi aday gorunurse sag hedef kolu
+  tercih edilir. Bu, mevcut Webots parkurundaki kirmizi/mavi kesisim
+  belirsizligini cozmek icindir; farkli gercek parkurda gerekirse
+  kalibrasyonla yeniden ayarlanmalidir.
 
 ### 2026-06-13 Kisa Egitim Denemesi
 
@@ -234,6 +242,76 @@ Yorum: Su anda egitim teknik olarak baslatilabilir. Ancak 600 step sadece
 Gercek egitim icin daha uzun sure, varyant parkurlar, random start, motor
 gurultusu/latency ve egitim sonrasi ayri test matrisi gerekir.
 
+### 2026-06-13 Option Q-learning Modeli
+
+Direct-action Q-learning baseline'i red nominalde calisti ama blue nominalde
+timeout verdi. Bu nedenle Q-learning ham direksiyon yerine option katmanina
+tasindi.
+
+Kullanilan model egitimi:
+
+```bash
+MONSTERBORG_RL_POLICY_LAYER=option \
+MONSTERBORG_RL_MODE=train \
+MONSTERBORG_RL_START_COLOR=random \
+MONSTERBORG_RL_TRAIN_STEPS=30000 \
+MONSTERBORG_RL_EPISODE_STEPS=4600 \
+MONSTERBORG_RL_SAVE_INTERVAL=1000 \
+MONSTERBORG_RL_EPSILON_START=0.10 \
+MONSTERBORG_RL_EPSILON_END=0.01 \
+MONSTERBORG_RL_ALPHA=0.14 \
+MONSTERBORG_RL_GAMMA=0.90 \
+MONSTERBORG_RL_Q_TABLE=/tmp/robofest_option_q_train_30k.json \
+/Applications/Webots.app/Contents/MacOS/webots --mode=fast --stdout --stderr --minimize \
+  ders_cizim/worlds/monsterborg_rgb_rl.wbt
+```
+
+Egitim ozeti:
+
+- `training_steps=30000`
+- `episodes=13`
+- `states=77`
+- terminal dagilimi: `reached_goal=10`, `lost_line=2`, `timeout=1`
+- model dosyasi: `ders_cizim/models/rgb_rl_option_q_table.json`
+
+Held-out eval komutu:
+
+```bash
+MONSTERBORG_RL_POLICY_LAYER=option \
+MONSTERBORG_RL_MODE=run \
+MONSTERBORG_RL_EPSILON=0 \
+MONSTERBORG_RL_Q_TABLE=ders_cizim/models/rgb_rl_option_q_table.json \
+python3 -m ders_cizim.controllers.rgb_rl_controller.smoke_matrix \
+  --webots /Applications/Webots.app/Contents/MacOS/webots \
+  --world ders_cizim/worlds/monsterborg_rgb_rl.wbt \
+  --textures \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_00.png \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_01.png \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_02.png \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_03.png \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_04.png \
+    ders_cizim/worlds/textures/variants/rgb_training_tracks_variant_05.png \
+    ders_cizim/worlds/textures/stress_variants/rgb_training_tracks_stress_00.png \
+    ders_cizim/worlds/textures/stress_variants/rgb_training_tracks_stress_01.png \
+    ders_cizim/worlds/textures/stress_variants/rgb_training_tracks_stress_02.png \
+    ders_cizim/worlds/textures/stress_variants/rgb_training_tracks_stress_03.png \
+  --colors red blue \
+  --steps 5200 \
+  --out-dir /tmp/robofest_option_q_heldout_matrix_final
+```
+
+Son held-out sonuc:
+
+- 20/20 kosu `pass=1`
+- 6 normal variant ve 4 stress variant egitimde gorulmeyen parkur dokularidir.
+- Her red/blue kosusunda terminal `reached_goal` oldu.
+- En dusuk final goal margin yaklasik `0.020` ve kabul esigi `0.015`.
+
+Bu sonuc Webots icin iyi bir genelleme sinyalidir; gercek parkur garantisi
+degildir. Gercek robotta kamera yuksekligi, isik, zemin parlakligi, bant
+kalinligi ve motor farklari icin once `hardware_probe` ve dusuk hizli kapali
+cevrim dogrulama yapilmalidir.
+
 ## Kabul Kriterleri
 
 Bir degisikligi "saglam" saymak icin minimum kontroller:
@@ -243,6 +321,10 @@ Bir degisikligi "saglam" saymak icin minimum kontroller:
   - `--colors red blue`
   - `terminal=reached_goal`
   - `pass=1`
+- Degisiklik genelleme iddiasi tasiyorsa held-out matrix gecmeli:
+  - 6 `variants` + 4 `stress_variants`
+  - `--colors red blue`
+  - toplam 20/20 `pass=1`
 - Kamera goruntusu cizgi + zemin gormeli; sadece renk bandini doldurmamali.
 - Fiziksel robotta once `hardware_probe`, sonra dusuk guclu motor kalibrasyonu,
   sonra sinirli hizli kapali cevrim calistirilmali.
@@ -274,7 +356,6 @@ Bir degisikligi "saglam" saymak icin minimum kontroller:
   kontrolu ile degistirmek veya en azindan opsiyonel hale getirmek.
 - Kamera maskesini fiziksel robot icin kalibre edilebilir HSV/RGB araliklariyla
   ayirmak.
-- Kesisimlerde hedef renk kilidini daha kararli yapmak icin "onceki hedef
-  rengine histerezis" veya "en yakin/onceki merkezle tutarlilik" filtresi
-  eklemek.
+- Kesisimlerde hedef renk kilidini daha kararli yapmak icin branch bias'i
+  config haline getirmek ve kamera/parkur kalibrasyonuna baglamak.
 - ALGORITMA.md dosyasini her parkur/kontrol degisikliginde guncellemek.

@@ -101,6 +101,19 @@ COLOR_CODES = {
     "mixed": 5,
 }
 
+POLICY_LAYER_DIRECT = "direct"
+POLICY_LAYER_OPTION = "option"
+POLICY_LAYERS = {POLICY_LAYER_DIRECT, POLICY_LAYER_OPTION}
+
+OPTION_NAMES = (
+    "follow_line",
+    "search_target",
+    "slow_follow",
+)
+OPTION_FOLLOW_LINE = OPTION_NAMES.index("follow_line")
+OPTION_SEARCH_TARGET = OPTION_NAMES.index("search_target")
+OPTION_SLOW_FOLLOW = OPTION_NAMES.index("slow_follow")
+
 
 @dataclass(slots=True)
 class RgbProfile:
@@ -115,11 +128,21 @@ class RgbProfile:
     threshold: float
 
 
-def q_table_path() -> Path:
+def q_table_path(policy_layer: str | None = None, *, train_mode: bool = False) -> Path:
     configured = os.getenv("MONSTERBORG_RL_Q_TABLE")
     if configured:
         return Path(configured)
-    return Path(__file__).resolve().parents[2] / "artifacts" / "rgb_rl" / "q_table.json"
+    if policy_layer == POLICY_LAYER_OPTION and not train_mode:
+        packaged_model = Path(__file__).resolve().parents[2] / "models" / "rgb_rl_option_q_table.json"
+        if packaged_model.exists():
+            return packaged_model
+    filename = "q_table_option.json" if policy_layer == POLICY_LAYER_OPTION else "q_table.json"
+    return Path(__file__).resolve().parents[2] / "artifacts" / "rgb_rl" / filename
+
+
+def normalize_policy_layer(value: str | None) -> str:
+    requested = (value or POLICY_LAYER_OPTION).strip().lower()
+    return requested if requested in POLICY_LAYERS else POLICY_LAYER_OPTION
 
 
 def read_pixel(camera_api, image: object, width: int, x: int, y: int) -> tuple[int, int, int]:
@@ -228,6 +251,26 @@ def segment_rows(
     return selected[:8], matched_target
 
 
+def branch_biased_target_segments(
+    segments: list[tuple[float, float, float, str, int, int, int, int]],
+    width: int,
+    target_color: str,
+) -> list[tuple[float, float, float, str, int, int, int, int]]:
+    if len(segments) < 2:
+        return segments
+
+    errors = [(segment[1] - width / 2.0) / max(width / 2.0, 1.0) for segment in segments]
+    if max(errors) - min(errors) < 0.65:
+        return segments
+
+    if target_color == "red" and max(errors) >= 0.45 and min(errors) <= -0.10:
+        biased = [segment for segment, error in zip(segments, errors) if error > 0.20]
+    else:
+        biased = []
+
+    return biased or segments
+
+
 def analyze_rgb_camera(
     camera,
     camera_api,
@@ -291,6 +334,7 @@ def analyze_rgb_camera(
         prefer_target=False,
     )
     if matched_target and target_segments and allow_target:
+        target_segments = branch_biased_target_segments(target_segments, width, target_color)
         selected = target_segments
         source_matched_target = True
         if allow_common and fallback_segments:
@@ -299,6 +343,22 @@ def analyze_rgb_camera(
             if best_fallback[3] == "black" and abs(fallback_error) < 0.42:
                 selected = fallback_segments
                 source_matched_target = False
+            else:
+                target_width = sum(segment[4] for segment in target_segments)
+                fallback_color_width = sum(
+                    segment[4]
+                    for segment in fallback_segments
+                    if segment[3] in TARGET_COLORS and segment[3] != target_color
+                )
+                if (
+                    best_fallback[3] in TARGET_COLORS
+                    and best_fallback[3] != target_color
+                    and target_width < 10
+                    and fallback_color_width >= max(target_width * 2, 8)
+                    and abs(fallback_error) < 0.68
+                ):
+                    selected = fallback_segments
+                    source_matched_target = False
     elif not allow_common:
         return RgbProfile(
             False,
@@ -388,61 +448,316 @@ def state_key(profile: RgbProfile, previous_error: float) -> str:
     )
 
 
+def quantize_lost_steps(lost_steps: int) -> int:
+    if lost_steps <= 0:
+        return 0
+    if lost_steps < 6:
+        return 1
+    if lost_steps < 18:
+        return 2
+    return 3
+
+
+def option_state_key(
+    profile: RgbProfile,
+    previous_error: float,
+    *,
+    target_seen: bool,
+    should_search_target: bool,
+    lost_steps: int,
+) -> str:
+    if not profile.visible:
+        stage = "lost"
+    elif target_seen or profile.matched_target:
+        stage = "target"
+    elif should_search_target:
+        stage = "search"
+    else:
+        stage = "common"
+    trend = profile.center_error - previous_error
+    if trend > 0.12:
+        trend_bin = 1
+    elif trend < -0.12:
+        trend_bin = -1
+    else:
+        trend_bin = 0
+    return (
+        f"stage{stage}"
+        f"|e{quantize_error(profile.center_error)}"
+        f"|c{quantize_confidence(profile.confidence)}"
+        f"|w{quantize_width(profile.line_width_ratio)}"
+        f"|rgb{COLOR_CODES.get(profile.color_name, COLOR_CODES['mixed'])}"
+        f"|target{COLOR_CODES.get(profile.target_color, COLOR_CODES['none'])}"
+        f"|match{1 if profile.matched_target else 0}"
+        f"|lost{quantize_lost_steps(lost_steps)}"
+        f"|t{trend_bin}"
+    )
+
+
+def fallback_option(profile: RgbProfile, *, should_search_target: bool) -> int:
+    if should_search_target:
+        return OPTION_SEARCH_TARGET
+    if not profile.visible:
+        return OPTION_SLOW_FOLLOW
+    if profile.line_width_ratio < 0.018 and (profile.matched_target or profile.color_name == profile.target_color):
+        return OPTION_SLOW_FOLLOW
+    if profile.confidence < 0.35 or abs(profile.center_error) > 0.58:
+        return OPTION_SLOW_FOLLOW
+    return OPTION_FOLLOW_LINE
+
+
+def line_follow_action(profile: RgbProfile) -> int:
+    action = heuristic_action(profile)
+    if not profile.visible:
+        return action
+
+    weak_trace = profile.line_width_ratio < 0.022 or (
+        profile.matched_target and profile.confidence < 0.75
+    )
+    if not weak_trace:
+        return action
+
+    error = profile.center_error
+    if error < -0.25:
+        return ACTION_NAMES.index("hard_left")
+    if error < -0.12:
+        return ACTION_NAMES.index("left")
+    if error > 0.25:
+        return ACTION_NAMES.index("hard_right")
+    if error > 0.12:
+        return ACTION_NAMES.index("right")
+    return action
+
+
+def allowed_option_indexes(
+    profile: RgbProfile,
+    *,
+    target_seen: bool,
+    should_search_target: bool,
+) -> tuple[int, ...]:
+    if should_search_target and not target_seen and not profile.matched_target:
+        if profile.visible and profile.confidence >= 0.35 and abs(profile.center_error) <= 0.58:
+            return (OPTION_SEARCH_TARGET, OPTION_FOLLOW_LINE)
+        return (OPTION_SEARCH_TARGET,)
+
+    if not profile.visible:
+        return (OPTION_SLOW_FOLLOW,)
+
+    if (
+        profile.line_width_ratio < 0.018
+        and (profile.matched_target or profile.color_name == profile.target_color)
+    ):
+        return (OPTION_SLOW_FOLLOW,)
+
+    if profile.confidence < 0.35 or abs(profile.center_error) > 0.58:
+        return (OPTION_SLOW_FOLLOW,)
+
+    stable_line = profile.confidence >= 0.55 and abs(profile.center_error) <= 0.50
+    if target_seen or profile.matched_target:
+        if stable_line:
+            return (OPTION_FOLLOW_LINE,)
+        return (OPTION_FOLLOW_LINE, OPTION_SLOW_FOLLOW)
+
+    return (OPTION_FOLLOW_LINE,)
+
+
+def option_to_action(
+    option_index: int,
+    profile: RgbProfile,
+    target_search_actions: dict[str, str],
+) -> tuple[int, float]:
+    option_name = OPTION_NAMES[option_index]
+    if option_name == "search_target":
+        return target_search_action(profile.target_color, target_search_actions), 0.82
+    if option_name == "slow_follow":
+        return line_follow_action(profile), 0.62
+    return line_follow_action(profile), 1.0
+
+
+def option_stage_from_key(key: str) -> str:
+    first, _, _ = key.partition("|")
+    return first.removeprefix("stage") if first.startswith("stage") else "direct"
+
+
+def compute_option_reward(
+    profile: RgbProfile,
+    option_index: int,
+    previous_key: str,
+    terminal_reason: str | None,
+) -> float:
+    if terminal_reason == "reached_goal":
+        return 8.0
+    if terminal_reason in {"lost_line", "off_board"}:
+        return -6.0
+    if terminal_reason == "timeout":
+        return -3.0
+
+    if not profile.visible:
+        return -2.6
+
+    reward = 0.9 * (1.0 - abs(profile.center_error)) + 0.25 * profile.confidence
+    if profile.matched_target:
+        reward += 1.15
+    elif profile.color_name == "black":
+        reward += 0.10
+    elif profile.color_name in TARGET_COLORS:
+        reward -= 0.60
+
+    previous_stage = option_stage_from_key(previous_key)
+    if option_index == OPTION_SEARCH_TARGET:
+        reward += 0.85 if previous_stage == "search" else -0.35
+    elif previous_stage == "search" and not profile.matched_target:
+        reward -= 0.25
+    if option_index == OPTION_SLOW_FOLLOW and (profile.confidence < 0.55 or abs(profile.center_error) > 0.45):
+        reward += 0.25
+    elif option_index == OPTION_SLOW_FOLLOW and profile.confidence >= 0.80 and abs(profile.center_error) < 0.20:
+        reward -= 0.12
+    return reward
+
+
+def compute_policy_reward(
+    policy_layer: str,
+    profile: RgbProfile,
+    policy_action_index: int,
+    previous_key: str,
+    terminal_reason: str | None,
+) -> float:
+    if policy_layer == POLICY_LAYER_OPTION:
+        return compute_option_reward(profile, policy_action_index, previous_key, terminal_reason)
+    reward = compute_reward(profile, policy_action_index)
+    if terminal_reason == "reached_goal":
+        reward += 6.0
+    elif terminal_reason in {"lost_line", "off_board"}:
+        reward -= 5.0
+    elif terminal_reason == "timeout":
+        reward -= 2.0
+    return reward
+
+
 class QPolicy:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        action_names: Sequence[str] = ACTION_NAMES,
+        format_name: str = "monsterborg-rgb-tabular-q-v1",
+    ) -> None:
         self.path = path
+        self.action_names = tuple(action_names)
+        self.format_name = format_name
         self.table: dict[str, list[float]] = {}
         self.training_steps = 0
         self.episodes = 0
+        self.skipped_states = 0
 
     def load(self) -> None:
         if not self.path.exists():
             return
         data = json.loads(self.path.read_text(encoding="utf-8"))
-        self.table = {
-            str(key): [float(value) for value in values]
-            for key, values in data.get("q_table", {}).items()
-        }
+        self.table = {}
+        self.skipped_states = 0
+        action_count = len(self.action_names)
+        for key, values in data.get("q_table", {}).items():
+            if not isinstance(values, list) or len(values) != action_count:
+                self.skipped_states += 1
+                continue
+            self.table[str(key)] = [float(value) for value in values]
         self.training_steps = int(data.get("training_steps", 0))
         self.episodes = int(data.get("episodes", 0))
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "format": "monsterborg-rgb-tabular-q-v1",
+            "format": self.format_name,
             "training_steps": self.training_steps,
             "episodes": self.episodes,
             "actions": [
-                {"index": index, "name": name, "turn": ACTION_TURNS[index]}
-                for index, name in enumerate(ACTION_NAMES)
+                {"index": index, "name": name}
+                for index, name in enumerate(self.action_names)
             ],
             "q_table": self.table,
         }
+        if self.action_names == ACTION_NAMES:
+            data["actions"] = [
+                {"index": index, "name": name, "turn": ACTION_TURNS[index]}
+                for index, name in enumerate(ACTION_NAMES)
+            ]
         self.path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
     def values_for(self, key: str) -> list[float]:
         if key not in self.table:
-            self.table[key] = [0.0 for _ in ACTION_TURNS]
+            self.table[key] = [0.0 for _ in self.action_names]
         return self.table[key]
 
-    def best_action(self, key: str, profile: RgbProfile) -> int:
+    def normalized_action_indexes(self, action_indexes: Sequence[int] | None = None) -> tuple[int, ...]:
+        if action_indexes is None:
+            return tuple(range(len(self.action_names)))
+        normalized = tuple(
+            index
+            for index in action_indexes
+            if isinstance(index, int) and 0 <= index < len(self.action_names)
+        )
+        return normalized or tuple(range(len(self.action_names)))
+
+    def best_value(self, key: str, action_indexes: Sequence[int] | None = None) -> float:
         values = self.values_for(key)
-        if max(values) == min(values) == 0.0:
-            return heuristic_action(profile)
-        best_value = max(values)
-        best_indexes = [index for index, value in enumerate(values) if value == best_value]
+        allowed = self.normalized_action_indexes(action_indexes)
+        return max(values[index] for index in allowed)
+
+    def best_action(
+        self,
+        key: str,
+        fallback_action: int,
+        *,
+        allowed_actions: Sequence[int] | None = None,
+        min_advantage: float = 0.0,
+    ) -> int:
+        values = self.values_for(key)
+        allowed = self.normalized_action_indexes(allowed_actions)
+        fallback_allowed = fallback_action in allowed
+        if max(values[index] for index in allowed) == min(values[index] for index in allowed) == 0.0:
+            return fallback_action if fallback_allowed else allowed[0]
+        best_value = max(values[index] for index in allowed)
+        if fallback_allowed and best_value <= values[fallback_action] + min_advantage:
+            return fallback_action
+        best_indexes = [index for index in allowed if values[index] == best_value]
         return random.choice(best_indexes)
 
-    def choose_action(self, key: str, profile: RgbProfile, epsilon: float) -> int:
+    def choose_action(
+        self,
+        key: str,
+        fallback_action: int,
+        epsilon: float,
+        *,
+        allowed_actions: Sequence[int] | None = None,
+        min_advantage: float = 0.0,
+    ) -> int:
+        allowed = self.normalized_action_indexes(allowed_actions)
         if random.random() < epsilon:
-            return random.randrange(len(ACTION_TURNS))
-        return self.best_action(key, profile)
+            return random.choice(allowed)
+        return self.best_action(
+            key,
+            fallback_action,
+            allowed_actions=allowed,
+            min_advantage=min_advantage,
+        )
 
-    def update(self, key: str, action_index: int, reward: float, next_key: str, alpha: float, gamma: float) -> None:
+    def update(
+        self,
+        key: str,
+        action_index: int,
+        reward: float,
+        next_key: str,
+        alpha: float,
+        gamma: float,
+        *,
+        next_allowed_actions: Sequence[int] | None = None,
+    ) -> None:
         values = self.values_for(key)
-        next_values = self.values_for(next_key)
         old_value = values[action_index]
-        values[action_index] = old_value + alpha * (reward + gamma * max(next_values) - old_value)
+        values[action_index] = old_value + alpha * (
+            reward + gamma * self.best_value(next_key, next_allowed_actions) - old_value
+        )
 
 
 def set_left_right_speed(left_motors, right_motors, left_speed: float, right_speed: float) -> tuple[float, float]:
@@ -706,6 +1021,11 @@ def main() -> None:
     gamma = env_float("MONSTERBORG_RL_GAMMA", 0.92)
     epsilon_start = env_float("MONSTERBORG_RL_EPSILON_START", 0.35)
     epsilon_end = env_float("MONSTERBORG_RL_EPSILON_END", 0.04)
+    option_min_advantage_default = 0.0 if train_mode else 0.15
+    option_min_advantage = max(
+        0.0,
+        env_float("MONSTERBORG_RL_OPTION_MIN_ADVANTAGE", option_min_advantage_default),
+    )
     episode_steps_limit = env_int("MONSTERBORG_RL_EPISODE_STEPS", 4600)
     lost_reset_steps = env_int("MONSTERBORG_RL_LOST_RESET_STEPS", 18)
     target_lock_min_x = env_float("MONSTERBORG_RL_TARGET_LOCK_MIN_X", 0.04)
@@ -719,6 +1039,7 @@ def main() -> None:
         "off",
     }
     target_search_actions = parse_target_search_actions(os.getenv("MONSTERBORG_RL_TARGET_SEARCH_ACTIONS"))
+    policy_layer = normalize_policy_layer(os.getenv("MONSTERBORG_RL_POLICY_LAYER"))
     drive_rng = random.Random(seed + 97_531)
     command_latency_queue: list[DifferentialDriveCommand] = []
 
@@ -750,7 +1071,15 @@ def main() -> None:
         except Exception:
             self_node = None
 
-    policy = QPolicy(q_table_path())
+    policy = QPolicy(
+        q_table_path(policy_layer, train_mode=train_mode),
+        action_names=OPTION_NAMES if policy_layer == POLICY_LAYER_OPTION else ACTION_NAMES,
+        format_name=(
+            "monsterborg-rgb-option-q-v1"
+            if policy_layer == POLICY_LAYER_OPTION
+            else "monsterborg-rgb-tabular-q-v1"
+        ),
+    )
     policy.load()
 
     previous_key: str | None = None
@@ -773,8 +1102,11 @@ def main() -> None:
     print(
         "rgb_rl_controller",
         f"mode={mode}",
+        f"policy_layer={policy_layer}",
         f"q_table={policy.path}",
         f"loaded_states={len(policy.table)}",
+        f"skipped_states={policy.skipped_states}",
+        f"option_min_advantage={option_min_advantage:.3f}",
         f"deadband={DRIVE_REALISM.motor_deadband:.3f}",
         f"speed_noise={DRIVE_REALISM.speed_noise_std:.3f}",
         f"latency_steps={DRIVE_REALISM.command_latency_steps}",
@@ -824,7 +1156,7 @@ def main() -> None:
             Camera,
             active_camera_target,
             previous_error,
-            allow_common=returning_start or returning_to_fork or not target_seen,
+            allow_common=True,
             allow_target=target_handoff_open,
         )
         target_lock_candidate = (
@@ -876,14 +1208,34 @@ def main() -> None:
                 if hasattr(robot, "simulationQuit"):
                     robot.simulationQuit(0)
                 break
-        key = state_key(profile, previous_error)
         episode_step += 1
         policy.training_steps += 1 if train_mode else 0
         lost_steps = 0 if profile.visible else lost_steps + 1
-
-        if train_mode and previous_key is not None and previous_action is not None:
-            reward = compute_reward(profile, previous_action)
-            policy.update(previous_key, previous_action, reward, key, alpha, gamma)
+        should_search_target = target_color in target_search_actions and should_search_for_target_branch(
+            profile,
+            target_seen=target_seen,
+            target_handoff_open=target_handoff_open,
+            current_translation=current_translation,
+            min_x=branch_search_min_x,
+        )
+        if policy_layer == POLICY_LAYER_OPTION:
+            key = option_state_key(
+                profile,
+                previous_error,
+                target_seen=target_seen,
+                should_search_target=should_search_target,
+                lost_steps=lost_steps,
+            )
+            policy_fallback_action = fallback_option(profile, should_search_target=should_search_target)
+            policy_allowed_actions: tuple[int, ...] | None = allowed_option_indexes(
+                profile,
+                target_seen=target_seen,
+                should_search_target=should_search_target,
+            )
+        else:
+            key = state_key(profile, previous_error)
+            policy_fallback_action = heuristic_action(profile)
+            policy_allowed_actions = None
 
         if train_mode:
             progress = min(1.0, policy.training_steps / max(max_train_steps, 1))
@@ -1003,18 +1355,36 @@ def main() -> None:
         record_start_pose = start_pose
         mission_stage = sequence_progress.stage if sequence_progress is not None else "single"
 
+        if train_mode and previous_key is not None and previous_action is not None:
+            reward = compute_policy_reward(policy_layer, profile, previous_action, previous_key, terminal_reason)
+            policy.update(
+                previous_key,
+                previous_action,
+                reward,
+                key,
+                alpha,
+                gamma,
+                next_allowed_actions=policy_allowed_actions,
+            )
+
+        policy_action_index: int | None = None
+        policy_action_name = "none"
         if terminal_reason is not None:
             command_latency_queue.clear()
             action = ACTION_NAMES.index("straight")
             action_name = "stop"
+            policy_action_name = "terminal"
             left_speed = 0.0
             right_speed = 0.0
             left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
         else:
             manual_drive_applied = False
+            drive_speed_scale = 1.0
             if sequence_progress is not None and sequence_progress.stage == "return_start":
                 action = ACTION_NAMES.index("straight")
                 action_name = "return_home"
+                policy_action_index = action
+                policy_action_name = action_name
                 command = pose_guided_return_command(
                     current_translation=current_translation,
                     current_rotation=current_rotation,
@@ -1038,6 +1408,8 @@ def main() -> None:
             ):
                 action = ACTION_NAMES.index("straight")
                 action_name = "branch_guide"
+                policy_action_index = action
+                policy_action_name = action_name
                 waypoint = mission_config.branch_waypoints[target_color]
                 command = pose_guided_return_command(
                     current_translation=current_translation,
@@ -1054,21 +1426,29 @@ def main() -> None:
                 right_speed = realistic.right
                 left_speed, right_speed = set_left_right_speed(left_motors, right_motors, left_speed, right_speed)
                 manual_drive_applied = True
-            elif target_color in target_search_actions and should_search_for_target_branch(
-                profile,
-                target_seen=target_seen,
-                target_handoff_open=target_handoff_open,
-                current_translation=current_translation,
-                min_x=branch_search_min_x,
-            ):
+            elif policy_layer == POLICY_LAYER_OPTION:
+                policy_action_index = policy.choose_action(
+                    key,
+                    policy_fallback_action,
+                    epsilon,
+                    allowed_actions=policy_allowed_actions,
+                    min_advantage=option_min_advantage,
+                )
+                policy_action_name = OPTION_NAMES[policy_action_index]
+                action, drive_speed_scale = option_to_action(policy_action_index, profile, target_search_actions)
+            elif should_search_target:
                 action = target_search_action(target_color, target_search_actions)
+                policy_action_index = action
+                policy_action_name = ACTION_NAMES[action]
             else:
-                action = policy.choose_action(key, profile, epsilon)
+                action = policy.choose_action(key, policy_fallback_action, epsilon)
+                policy_action_index = action
+                policy_action_name = ACTION_NAMES[action]
             if not manual_drive_applied:
                 action_name = ACTION_NAMES[action]
                 left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
                 delayed = delayed_drive_command(
-                    DifferentialDriveCommand(left_speed, right_speed),
+                    DifferentialDriveCommand(left_speed * drive_speed_scale, right_speed * drive_speed_scale),
                     command_latency_queue,
                     DRIVE_REALISM,
                 )
@@ -1083,6 +1463,7 @@ def main() -> None:
                 f"step={log_step}",
                 f"episode={policy.episodes}",
                 f"state={key}",
+                f"policy={policy_action_name}",
                 f"action={action_name}",
                 f"error={profile.center_error:.3f}",
                 f"confidence={profile.confidence:.3f}",
@@ -1119,7 +1500,7 @@ def main() -> None:
             reset_robot_if_possible(robot, self_node, translation_field, rotation_field, start_pose)
         else:
             previous_key = key
-            previous_action = action
+            previous_action = policy_action_index if policy_action_index is not None else action
             previous_error = profile.center_error
         if current_translation is not None and len(current_translation) >= 3:
             previous_translation_for_heading = (
@@ -1187,6 +1568,13 @@ def main() -> None:
                     "target_lock_candidate": target_lock_candidate,
                     "target_lock_candidates": target_lock_candidates,
                     "target_handoff_open": target_handoff_open,
+                    "policy_layer": policy_layer,
+                    "policy_action": policy_action_name,
+                    "policy_allowed_actions": (
+                        [policy.action_names[index] for index in policy_allowed_actions]
+                        if policy_allowed_actions is not None
+                        else None
+                    ),
                     "action": action_name,
                     "left_speed": left_speed,
                     "right_speed": right_speed,
