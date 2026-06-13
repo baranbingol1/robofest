@@ -65,11 +65,11 @@ class StartPose:
 
 
 DEFAULT_GOAL_ZONES = {
-    "red": GoalZone("red", (0.80, -0.55), 0.18),
+    "red": GoalZone("red", (0.80, 0.36), 0.18),
     "green": GoalZone("green", (0.10, -0.50), 0.20),
     "blue": GoalZone("blue", (0.32, -0.28), 0.30),
 }
-DEFAULT_COLOR_SEQUENCE = TARGET_COLORS
+DEFAULT_COLOR_SEQUENCE = ("red",)
 DEFAULT_FORK_ZONE = GoalZone("fork", (0.38, -0.70), 0.18)
 DEFAULT_BRANCH_WAYPOINTS = {
     "red": (0.50, -0.70),

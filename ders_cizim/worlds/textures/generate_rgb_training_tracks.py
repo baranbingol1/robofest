@@ -13,10 +13,7 @@ SCALE = 3
 CANVAS = SIZE * SCALE
 BACKGROUND = (247, 247, 244, 255)
 SHADOW = (210, 210, 205, 210)
-BLACK = (18, 18, 18, 255)
 RED = (238, 28, 42, 255)
-GREEN = (20, 178, 80, 255)
-BLUE = (38, 94, 232, 255)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +215,6 @@ def draw_line_gaps(
 
 def build_track_image(variant: TrackVariant | None = None) -> Image.Image:
     line_width = 42 if variant is None else variant.line_width
-    common_width = max(30, line_width - 4)
     brightness = 1.0 if variant is None else variant.brightness
     color_scale = 1.0 if variant is None else variant.color_scale
     background = scale_color(BACKGROUND, brightness)
@@ -236,76 +232,35 @@ def build_track_image(variant: TrackVariant | None = None) -> Image.Image:
             speckle_count=variant.speckle_count,
         )
 
-    common = [(-0.74, -0.70), (-0.42, -0.70), (-0.06, -0.70), (0.38, -0.70)]
-    fork = (0.38, -0.70)
-    red = [
-        fork,
-        (0.50, -0.70),
-        (0.65, -0.62),
-        (0.80, -0.60),
-        (0.84, -0.48),
-        (0.73, -0.37),
-        (0.57, -0.42),
-        (0.48, -0.55),
-        (0.42, -0.66),
-        fork,
-    ]
-    green = [
-        fork,
-        (0.24, -0.58),
-        (0.02, -0.47),
-        (-0.52, -0.36),
-        (-0.82, -0.12),
-        (-0.80, 0.23),
-        (-0.53, 0.43),
-        (-0.22, 0.36),
-        (-0.06, 0.25),
-        (0.04, 0.03),
-        (0.00, -0.28),
-        (0.22, -0.56),
-        fork,
-    ]
-    blue = [
-        fork,
-        (0.39, -0.49),
-        (0.44, -0.21),
-        (0.47, 0.08),
-        (0.62, 0.36),
-        (0.58, 0.64),
-        (0.35, 0.79),
-        (0.10, 0.68),
-        (-0.13, 0.46),
-        (0.05, 0.28),
-        (0.24, 0.06),
-        (0.32, -0.32),
-        fork,
+    red_course = [
+        (-0.78, -0.70),
+        (-0.42, -0.70),
+        (-0.08, -0.70),
+        (0.22, -0.66),
+        (0.52, -0.54),
+        (0.72, -0.36),
+        (0.66, -0.12),
+        (0.36, 0.02),
+        (-0.02, 0.10),
+        (-0.22, 0.32),
+        (-0.08, 0.54),
+        (0.26, 0.66),
+        (0.58, 0.58),
+        (0.80, 0.36),
     ]
     path_jitter = 0.0 if variant is None else variant.path_jitter
-    common = jitter_points(common, rng, path_jitter * 0.4, preserve_ends=True)
-    red = jitter_points(red, rng, path_jitter, preserve_ends=True)
-    green = jitter_points(green, rng, path_jitter, preserve_ends=True)
-    blue = jitter_points(blue, rng, path_jitter, preserve_ends=True)
+    red_course = jitter_points(red_course, rng, path_jitter, preserve_ends=True)
 
-    draw_track(draw, red, scale_color(RED, color_scale), width=line_width, shadow=shadow)
-    draw_track(draw, green, scale_color(GREEN, color_scale), width=line_width, shadow=shadow)
-    draw_track(draw, blue, scale_color(BLUE, color_scale), width=line_width, shadow=shadow)
-    draw_track(draw, common, BLACK, width=common_width, shadow=shadow)
+    draw_track(draw, red_course, scale_color(RED, color_scale), width=line_width, shadow=shadow)
     if variant is not None:
         draw_line_gaps(
             draw,
             rng,
-            [red, green, blue, common],
+            [red_course],
             background=background,
             gap_count=variant.gap_count,
             gap_radius=variant.gap_radius,
         )
-
-    fork_x, fork_y = world_to_px(fork)
-    fork_radius = 26 * SCALE
-    draw.ellipse(
-        (fork_x - fork_radius, fork_y - fork_radius, fork_x + fork_radius, fork_y + fork_radius),
-        fill=BLACK,
-    )
 
     border_width = 4 * SCALE
     draw.rectangle(

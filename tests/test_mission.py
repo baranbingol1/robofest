@@ -134,7 +134,8 @@ class MissionTests(unittest.TestCase):
 
     def test_evaluate_terminal_reason_requires_target_lock_for_goal_by_default(self):
         config = mission_config_from_env({})
-        translation = [0.8, -0.55, 0.1]
+        zone = config.zones["red"]
+        translation = [zone.center[0], zone.center[1], 0.1]
         self.assertIsNone(
             evaluate_terminal_reason(
                 target_color="red",

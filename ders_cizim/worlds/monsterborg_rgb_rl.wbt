@@ -127,41 +127,11 @@ Group {
       ]
     }
     Pose {
-      translation 0.80 -0.55 0.006
+      translation 0.80 0.36 0.006
       children [
         Shape {
           appearance PBRAppearance {
             baseColor 0.9 0.05 0.04
-            roughness 0.7
-            metalness 0
-          }
-          geometry Box {
-            size 0.10 0.10 0.003
-          }
-        }
-      ]
-    }
-    Pose {
-      translation 0.10 -0.50 0.006
-      children [
-        Shape {
-          appearance PBRAppearance {
-            baseColor 0.05 0.75 0.16
-            roughness 0.7
-            metalness 0
-          }
-          geometry Box {
-            size 0.10 0.10 0.003
-          }
-        }
-      ]
-    }
-    Pose {
-      translation 0.32 -0.28 0.006
-      children [
-        Shape {
-          appearance PBRAppearance {
-            baseColor 0.06 0.18 0.9
             roughness 0.7
             metalness 0
           }
