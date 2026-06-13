@@ -66,15 +66,13 @@ class StartPose:
 
 DEFAULT_GOAL_ZONES = {
     "red": GoalZone("red", (0.80, 0.36), 0.18),
-    "green": GoalZone("green", (0.10, -0.50), 0.20),
-    "blue": GoalZone("blue", (0.32, -0.28), 0.30),
+    "blue": GoalZone("blue", (-0.72, 0.52), 0.18),
 }
-DEFAULT_COLOR_SEQUENCE = ("red",)
-DEFAULT_FORK_ZONE = GoalZone("fork", (0.38, -0.70), 0.18)
+DEFAULT_COLOR_SEQUENCE = ("red", "blue")
+DEFAULT_FORK_ZONE = GoalZone("fork", (0.38, -0.62), 0.20)
 DEFAULT_BRANCH_WAYPOINTS = {
-    "red": (0.50, -0.70),
-    "green": (0.24, -0.58),
-    "blue": (0.39, -0.49),
+    "red": (0.52, -0.54),
+    "blue": (0.22, -0.44),
 }
 DEFAULT_GOAL_REACH_CLEARANCE = 0.02
 DEFAULT_START_RETURN_RADIUS = 0.12

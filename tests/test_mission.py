@@ -31,7 +31,7 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(zones["blue"], DEFAULT_GOAL_ZONES["blue"])
 
     def test_parse_color_sequence_filters_invalid_and_duplicate_colors(self):
-        self.assertEqual(parse_color_sequence("green,orange,red,green,blue"), ("green", "red", "blue"))
+        self.assertEqual(parse_color_sequence("green,orange,red,green,blue"), ("red", "blue"))
         self.assertEqual(parse_color_sequence("orange"), tuple(DEFAULT_COLOR_SEQUENCE))
 
     def test_parse_zone_accepts_configurable_fork_zone(self):
@@ -43,7 +43,7 @@ class MissionTests(unittest.TestCase):
 
     def test_parse_branch_waypoints_overrides_known_colors(self):
         waypoints = parse_branch_waypoints("green=0.2:-0.5,orange=1:1,blue=bad")
-        self.assertEqual(waypoints["green"], (0.2, -0.5))
+        self.assertNotIn("green", waypoints)
         self.assertEqual(waypoints["blue"], DEFAULT_BRANCH_WAYPOINTS["blue"])
 
     def test_mission_config_ignores_invalid_board_extent(self):
@@ -67,13 +67,13 @@ class MissionTests(unittest.TestCase):
         self.assertAlmostEqual(config.start_return_radius, 0.09)
 
     def test_sequence_progress_visits_each_color_then_returns_home(self):
-        progress = SequenceProgress(("red", "green"))
+        progress = SequenceProgress(("red", "blue"))
         self.assertEqual(progress.active_color, "red")
         self.assertTrue(progress.mark_color_goal_reached())
         self.assertEqual(progress.stage, "return_fork")
         self.assertEqual(progress.visited_colors, ("red",))
         self.assertTrue(progress.mark_returned_to_fork())
-        self.assertEqual(progress.active_color, "green")
+        self.assertEqual(progress.active_color, "blue")
         self.assertEqual(progress.stage, "seek_color")
         self.assertTrue(progress.mark_color_goal_reached())
         self.assertTrue(progress.mark_returned_to_fork())
@@ -81,7 +81,7 @@ class MissionTests(unittest.TestCase):
         self.assertIsNone(progress.active_color)
         self.assertTrue(progress.mark_returned_start())
         self.assertTrue(progress.complete)
-        self.assertEqual(progress.visited_colors, ("red", "green"))
+        self.assertEqual(progress.visited_colors, ("red", "blue"))
 
     def test_evaluate_terminal_reason_requires_goal_clearance(self):
         config = mission_config_from_env({})

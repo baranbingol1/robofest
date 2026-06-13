@@ -121,7 +121,7 @@ def build_smoke_cases(
     speed_scale_jitter: float = 0.0,
     camera_noise: float = 0.0,
     mission_mode: str = "single",
-    color_sequence: Sequence[str] = ("red",),
+    color_sequence: Sequence[str] = ("red", "blue"),
 ) -> list[SmokeCase]:
     cases: list[SmokeCase] = []
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -130,7 +130,7 @@ def build_smoke_cases(
     normalized_mode = "sequence" if mission_mode.strip().lower() in {"sequence", "multi", "all"} else "single"
     sequence_colors = tuple(color.strip().lower() for color in color_sequence if color.strip())
     if not sequence_colors:
-        sequence_colors = ("red",)
+        sequence_colors = ("red", "blue")
     for texture_path in texture_paths:
         variant_name = variant_name_from_texture(texture_path)
         texture_url = texture_url_for_world(base_world, texture_path)
@@ -291,10 +291,10 @@ def main() -> None:
         nargs="+",
         default=sorted(Path("ders_cizim/worlds/textures/variants").glob("rgb_training_tracks_variant_*.png")),
     )
-    parser.add_argument("--colors", nargs="+", default=["red"])
+    parser.add_argument("--colors", nargs="+", default=["red", "blue"])
     parser.add_argument("--mission-mode", choices=["single", "sequence"], default="single")
-    parser.add_argument("--sequence", nargs="+", default=["red"])
-    parser.add_argument("--steps", type=int, default=900)
+    parser.add_argument("--sequence", nargs="+", default=["red", "blue"])
+    parser.add_argument("--steps", type=int, default=4600)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--start-lateral-jitter", type=float, default=0.0)

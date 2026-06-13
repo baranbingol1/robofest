@@ -13,7 +13,9 @@ SCALE = 3
 CANVAS = SIZE * SCALE
 BACKGROUND = (247, 247, 244, 255)
 SHADOW = (210, 210, 205, 210)
+BLACK = (18, 18, 18, 255)
 RED = (238, 28, 42, 255)
+BLUE = (38, 94, 232, 255)
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +217,7 @@ def draw_line_gaps(
 
 def build_track_image(variant: TrackVariant | None = None) -> Image.Image:
     line_width = 42 if variant is None else variant.line_width
+    common_width = max(30, line_width - 4)
     brightness = 1.0 if variant is None else variant.brightness
     color_scale = 1.0 if variant is None else variant.color_scale
     background = scale_color(BACKGROUND, brightness)
@@ -232,11 +235,16 @@ def build_track_image(variant: TrackVariant | None = None) -> Image.Image:
             speckle_count=variant.speckle_count,
         )
 
-    red_course = [
+    common_course = [
         (-0.78, -0.70),
         (-0.42, -0.70),
         (-0.08, -0.70),
         (0.22, -0.66),
+        (0.38, -0.62),
+    ]
+    fork = common_course[-1]
+    red_course = [
+        fork,
         (0.52, -0.54),
         (0.72, -0.36),
         (0.66, -0.12),
@@ -248,19 +256,44 @@ def build_track_image(variant: TrackVariant | None = None) -> Image.Image:
         (0.58, 0.58),
         (0.80, 0.36),
     ]
+    blue_course = [
+        fork,
+        (0.22, -0.44),
+        (-0.02, -0.28),
+        (-0.32, -0.12),
+        (-0.62, 0.08),
+        (-0.78, 0.34),
+        (-0.66, 0.56),
+        (-0.42, 0.66),
+        (-0.18, 0.52),
+        (-0.36, 0.36),
+        (-0.58, 0.44),
+        (-0.72, 0.52),
+    ]
     path_jitter = 0.0 if variant is None else variant.path_jitter
+    common_course = jitter_points(common_course, rng, path_jitter * 0.4, preserve_ends=True)
     red_course = jitter_points(red_course, rng, path_jitter, preserve_ends=True)
+    blue_course = jitter_points(blue_course, rng, path_jitter, preserve_ends=True)
 
     draw_track(draw, red_course, scale_color(RED, color_scale), width=line_width, shadow=shadow)
+    draw_track(draw, blue_course, scale_color(BLUE, color_scale), width=line_width, shadow=shadow)
+    draw_track(draw, common_course, BLACK, width=common_width, shadow=shadow)
     if variant is not None:
         draw_line_gaps(
             draw,
             rng,
-            [red_course],
+            [common_course, red_course, blue_course],
             background=background,
             gap_count=variant.gap_count,
             gap_radius=variant.gap_radius,
         )
+
+    fork_x, fork_y = world_to_px(fork)
+    fork_radius = 24 * SCALE
+    draw.ellipse(
+        (fork_x - fork_radius, fork_y - fork_radius, fork_x + fork_radius, fork_y + fork_radius),
+        fill=BLACK,
+    )
 
     border_width = 4 * SCALE
     draw.rectangle(

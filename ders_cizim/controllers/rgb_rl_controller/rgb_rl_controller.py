@@ -745,7 +745,7 @@ def main() -> None:
     gamma = env_float("MONSTERBORG_RL_GAMMA", 0.92)
     epsilon_start = env_float("MONSTERBORG_RL_EPSILON_START", 0.35)
     epsilon_end = env_float("MONSTERBORG_RL_EPSILON_END", 0.04)
-    episode_steps_limit = env_int("MONSTERBORG_RL_EPISODE_STEPS", 850)
+    episode_steps_limit = env_int("MONSTERBORG_RL_EPISODE_STEPS", 4600)
     lost_reset_steps = env_int("MONSTERBORG_RL_LOST_RESET_STEPS", 18)
     target_lock_min_x = env_float("MONSTERBORG_RL_TARGET_LOCK_MIN_X", 0.04)
     target_lock_min_step = env_int("MONSTERBORG_RL_TARGET_LOCK_MIN_STEP", 0)

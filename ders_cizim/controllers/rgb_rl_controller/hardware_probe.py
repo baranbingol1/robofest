@@ -83,7 +83,7 @@ def load_image(path: Path):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", default="red", choices=["red", "green", "blue"])
+    parser.add_argument("--target", default="red", choices=["red", "blue"])
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--interval", type=float, default=0.05)
     parser.add_argument("--image", type=Path, default=None, help="Replay one saved RGB image instead of using Pi camera")

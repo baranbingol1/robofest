@@ -67,17 +67,17 @@ class TrackVariantTests(unittest.TestCase):
         self.assertEqual(first.tobytes(), second.tobytes())
         self.assertNotEqual(first.tobytes(), baseline.tobytes())
 
-    def test_default_track_image_contains_only_red_course_color(self):
+    def test_default_track_image_contains_red_and_blue_course_colors(self):
         image = build_track_image()
         raw = image.tobytes()
-        pixels = zip(raw[0::3], raw[1::3], raw[2::3])
+        pixels = list(zip(raw[0::3], raw[1::3], raw[2::3]))
         red_pixels = sum(1 for red, green, blue in pixels if red > 150 and green < 90 and blue < 100)
         green_pixels = sum(1 for red, green, blue in pixels if green > 130 and red < 100 and blue < 130)
         blue_pixels = sum(1 for red, green, blue in pixels if blue > 150 and red < 120 and green < 140)
 
         self.assertGreater(red_pixels, 1000)
+        self.assertGreater(blue_pixels, 1000)
         self.assertEqual(green_pixels, 0)
-        self.assertEqual(blue_pixels, 0)
 
 
 if __name__ == "__main__":

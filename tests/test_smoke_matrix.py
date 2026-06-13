@@ -59,15 +59,15 @@ Camera {
             cases = build_smoke_cases(
                 base_world=base_world,
                 texture_paths=textures,
-                target_colors=("red", "green"),
+                target_colors=("red", "blue"),
                 out_dir=out_dir,
                 steps=300,
             )
             self.assertEqual([case.name for case in cases], [
                 "variant_00_red_300",
-                "variant_00_green_300",
+                "variant_00_blue_300",
                 "variant_01_red_300",
-                "variant_01_green_300",
+                "variant_01_blue_300",
             ])
             self.assertTrue(all(case.log_path.parent == out_dir for case in cases))
             self.assertTrue(all(case.steps == 300 for case in cases))
@@ -118,19 +118,19 @@ Camera {
             cases = build_smoke_cases(
                 base_world=base_world,
                 texture_paths=[root / "textures" / "variants" / "rgb_training_tracks_variant_00.png"],
-                target_colors=("red", "green", "blue"),
+                target_colors=("red", "blue"),
                 out_dir=root / "artifacts",
                 steps=2400,
                 mission_mode="sequence",
-                color_sequence=("blue", "green", "red"),
+                color_sequence=("blue", "red"),
             )
             self.assertEqual([case.name for case in cases], [
-                "variant_00_sequence_blue-green-red_2400",
+                "variant_00_sequence_blue-red_2400",
             ])
             self.assertEqual(cases[0].target_color, "blue")
             env = env_for_case(cases[0])
             self.assertEqual(env["MONSTERBORG_RL_MISSION_MODE"], "sequence")
-            self.assertEqual(env["MONSTERBORG_RL_COLOR_SEQUENCE"], "blue,green,red")
+            self.assertEqual(env["MONSTERBORG_RL_COLOR_SEQUENCE"], "blue,red")
 
     def test_build_smoke_cases_can_expand_seeded_randomized_episodes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,7 +236,7 @@ Camera {
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             case = SmokeCase(
-                name="variant_00_sequence_red-green-blue_2400",
+                name="variant_00_sequence_red-blue_2400",
                 variant_name="variant_00",
                 target_color="red",
                 world_path=root / "world.wbt",
@@ -244,7 +244,7 @@ Camera {
                 summary_path=root / "summary.json",
                 steps=2400,
                 mission_mode="sequence",
-                color_sequence=("red", "green", "blue"),
+                color_sequence=("red", "blue"),
             )
             summary = RunSummary(
                 steps=1200,
@@ -263,7 +263,7 @@ Camera {
                 success=True,
                 returned_start=True,
                 sequence_complete=True,
-                sequence_visited_colors=("red", "green", "blue"),
+                sequence_visited_colors=("red", "blue"),
             )
             with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
                 run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -288,7 +288,7 @@ Camera {
                 success=True,
                 returned_start=False,
                 sequence_complete=False,
-                sequence_visited_colors=("red", "green", "blue"),
+                sequence_visited_colors=("red", "blue"),
             )
             with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
                 run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")

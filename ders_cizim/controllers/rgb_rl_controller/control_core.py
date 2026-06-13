@@ -22,9 +22,8 @@ ACTION_NAMES = (
     "right",
     "hard_right",
 )
-TARGET_COLORS = ("red", "green", "blue")
+TARGET_COLORS = ("red", "blue")
 DEFAULT_TARGET_SEARCH_ACTIONS = {
-    "green": "hard_left",
     "blue": "left",
 }
 

@@ -141,6 +141,21 @@ Group {
         }
       ]
     }
+    Pose {
+      translation -0.72 0.52 0.006
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.06 0.18 0.9
+            roughness 0.7
+            metalness 0
+          }
+          geometry Box {
+            size 0.10 0.10 0.003
+          }
+        }
+      ]
+    }
   ]
 }
 DEF MONSTERBORG_RL Robot {

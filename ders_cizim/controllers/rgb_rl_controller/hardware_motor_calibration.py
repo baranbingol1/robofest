@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 try:
     from .control_core import DifferentialDriveCommand, clamp
-    from .hardware_pi import NullMotorSink, ThunderBorgMotorSink
+    from .hardware_pi import NullMotorSink, TB6612GPIOMotorSink
 except ImportError:
     from control_core import DifferentialDriveCommand, clamp
-    from hardware_pi import NullMotorSink, ThunderBorgMotorSink
+    from hardware_pi import NullMotorSink, TB6612GPIOMotorSink
 
 
 MAX_CALIBRATION_POWER = 0.25
@@ -55,12 +55,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--power", type=float, default=0.12)
     parser.add_argument("--pulse-seconds", type=float, default=0.35)
-    parser.add_argument("--armed", action="store_true", help="Actually command ThunderBorg motors")
+    parser.add_argument("--armed", action="store_true", help="Actually command TB6612 GPIO motors")
     args = parser.parse_args()
 
     sequence = build_calibration_sequence(power=args.power, pulse_seconds=args.pulse_seconds)
-    sink = ThunderBorgMotorSink() if args.armed else NullMotorSink()
-    run_calibration_sequence(sink, sequence)
+    sink = TB6612GPIOMotorSink() if args.armed else NullMotorSink()
+    try:
+        run_calibration_sequence(sink, sequence)
+    finally:
+        close_sink = getattr(sink, "close", None)
+        if callable(close_sink):
+            close_sink()
     if not args.armed:
         print("dry_run=1 commands_recorded=", len(sink.commands))
 
