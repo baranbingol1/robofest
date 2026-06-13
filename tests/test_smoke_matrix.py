@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from ders_cizim.controllers.rgb_rl_controller.sim_metrics import RunSummary
 from ders_cizim.controllers.rgb_rl_controller.smoke_matrix import (
@@ -210,6 +210,27 @@ Camera {
                 with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.summarize_file", return_value=summary):
                     result = run_case(Path("webots"), case)
             self.assertFalse(result["passed_smoke_gate"])
+            run_mock.assert_called_with(
+                [
+                    "webots",
+                    "--mode=fast",
+                    "--stdout",
+                    "--stderr",
+                    "--minimize",
+                    str(case.world_path.resolve()),
+                ],
+                env=ANY,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.subprocess.run") as run_mock:
+                run_mock.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+                with patch("ders_cizim.controllers.rgb_rl_controller.smoke_matrix.summarize_file", return_value=summary):
+                    run_case(Path("webots"), case, webots_mode="realtime", minimize=False)
+            self.assertNotIn("--minimize", run_mock.call_args.args[0])
+            self.assertIn("--mode=realtime", run_mock.call_args.args[0])
 
     def test_run_case_sequence_gate_requires_returned_start(self):
         with tempfile.TemporaryDirectory() as tmp:

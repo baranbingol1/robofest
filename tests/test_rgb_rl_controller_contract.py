@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 from ders_cizim.controllers.rgb_rl_controller import control_core
 from ders_cizim.controllers.rgb_rl_controller import rgb_rl_controller
@@ -92,6 +94,44 @@ class RgbRlControllerContractTests(unittest.TestCase):
         )
         self.assertLess(command.left, 0.0)
         self.assertLess(command.right, 0.0)
+
+    def test_q_policy_initializes_unseen_states_with_action_values(self):
+        profile = rgb_rl_controller.RgbProfile(
+            visible=True,
+            center_error=-0.55,
+            confidence=0.8,
+            color_name="red",
+            target_color="red",
+            matched_target=True,
+            line_width_ratio=0.12,
+            rgb_balance=(120.0, 20.0, 20.0),
+            threshold=30.0,
+        )
+        policy = rgb_rl_controller.QPolicy(Path("unused.json"))
+        key = rgb_rl_controller.state_key(profile, previous_error=-0.20)
+
+        action = policy.choose_action(key, profile, epsilon=0.0)
+        values = policy.values_for(key)
+
+        self.assertEqual(action, values.index(max(values)))
+        self.assertNotEqual(values, [0.0 for _ in values])
+
+    def test_q_policy_replaces_legacy_zero_rows_instead_of_using_heuristic_fallback(self):
+        profile = SimpleNamespace(
+            visible=True,
+            center_error=0.48,
+            confidence=0.9,
+            color_name="red",
+            target_color="red",
+            matched_target=True,
+            line_width_ratio=0.13,
+        )
+        policy = rgb_rl_controller.QPolicy(Path("unused.json"))
+        policy.table["legacy"] = [0.0 for _ in rgb_rl_controller.ACTION_NAMES]
+
+        policy.choose_action("legacy", profile, epsilon=0.0)
+
+        self.assertNotEqual(policy.table["legacy"], [0.0 for _ in rgb_rl_controller.ACTION_NAMES])
 
 
 if __name__ == "__main__":

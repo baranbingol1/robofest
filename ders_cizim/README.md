@@ -22,7 +22,7 @@ The controller now uses shared modules:
 The runtime is split into three layers:
 
 1. Perception samples the lower camera image, classifies black/red/green/blue pixels, segments the visible line, and emits `visible`, `center_error`, `confidence`, `color_name`, and `matched_target`.
-2. Control defaults to the red target and follows the visible red line. The selected action is converted into clipped differential wheel speeds.
+2. Control defaults to the red target and selects actions through a tabular Q-learning policy. In training mode, Webots episodes update the Q-table from camera state, action, reward, and next-state transitions. In run mode, the loaded or initialized Q values choose the action, which is converted into clipped differential wheel speeds.
 3. Mission supervision is simulation-only: Webots global pose is used to reset randomized starts, score the red goal-zone visit, and stop the episode when the mission is done or unsafe.
 
 The Raspberry Pi path should reuse layers 1 and 2. Layer 3 should be replaced by a real-world stop rule such as a visible finish marker, a measured distance gate, or a manual/operator stop.
@@ -96,6 +96,18 @@ $env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_red_2600_summa
 & 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\monsterborg_rgb_rl.wbt'
 ```
 
+Train or refresh the Q-table:
+
+```powershell
+$env:MONSTERBORG_RL_MODE='train'
+$env:MONSTERBORG_RL_TRAIN_STEPS='60000'
+$env:MONSTERBORG_RL_SAVE_INTERVAL='1000'
+$env:MONSTERBORG_RL_Q_TABLE='ders_cizim\artifacts\rgb_rl\q_table.json'
+& 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\monsterborg_rgb_rl.wbt'
+```
+
+For deployment or smoke runs, leave `MONSTERBORG_RL_MODE` unset or set it to `run`. If `MONSTERBORG_RL_Q_TABLE` points to a trained table, the controller uses those values; unseen states are initialized as Q values and can be improved by another training pass.
+
 Run the red-only mission with randomized starts:
 
 ```powershell
@@ -141,6 +153,13 @@ python -m ders_cizim.controllers.rgb_rl_controller.smoke_matrix `
 ```
 
 A passing red-only matrix reports `terminal=reached_goal`, `success=1`, and `pass=1` for each texture.
+
+To watch the same matrix in Webots instead of running minimized, add:
+
+```powershell
+  --visible `
+  --webots-mode fast
+```
 
 Run randomized start episodes:
 
@@ -245,6 +264,15 @@ python -m ders_cizim.controllers.rgb_rl_controller.smoke_matrix `
 ```
 
 A passing stress run should still report `reached_goal`; failures usually mean the line gap or camera perturbation is too aggressive.
+
+Additional color-transfer checks can use the generated recolor textures:
+
+```text
+worlds/textures/color_variants/rgb_training_tracks_green.png
+worlds/textures/color_variants/rgb_training_tracks_blue.png
+```
+
+When using these recolored single-route textures, set the matching target color and override that color's goal zone to the same route endpoint, for example `green=0.80:0.36:0.18`.
 
 ## Raspberry Pi Transfer
 

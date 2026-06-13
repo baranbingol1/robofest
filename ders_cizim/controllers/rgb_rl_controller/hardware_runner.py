@@ -15,25 +15,25 @@ try:
         ACTION_NAMES,
         TARGET_COLORS,
         action_to_command,
-        heuristic_action,
         parse_target_search_actions,
         target_search_action,
     )
     from .hardware_pi import NullMotorSink, PiCameraFrameSource, ThunderBorgMotorSink
     from .hardware_probe import analyze_frame, summarize_profile_records
     from .robot_config import safety_limits_from_env
+    from .rgb_rl_controller import QPolicy, q_table_path, state_key
 except ImportError:
     from control_core import (
         ACTION_NAMES,
         TARGET_COLORS,
         action_to_command,
-        heuristic_action,
         parse_target_search_actions,
         target_search_action,
     )
     from hardware_pi import NullMotorSink, PiCameraFrameSource, ThunderBorgMotorSink
     from hardware_probe import analyze_frame, summarize_profile_records
     from robot_config import safety_limits_from_env
+    from rgb_rl_controller import QPolicy, q_table_path, state_key
 
 
 class FrameSource(Protocol):
@@ -115,6 +115,8 @@ def profile_view(record: dict[str, object], target_color: str):
         confidence=float(record.get("confidence", 0.0)),
         color_name=str(record.get("color_name", "none")),
         target_color=target_color,
+        matched_target=bool(record.get("matched_target", False)),
+        line_width_ratio=float(record.get("line_width_ratio", 0.0)),
     )
 
 
@@ -126,6 +128,8 @@ def choose_action(
     target_seen: bool,
     target_search_actions: dict[str, str],
     branch_search_after_frames: int,
+    policy: QPolicy,
+    previous_error: float,
 ) -> int:
     branch_gate_open = branch_search_after_frames > 0 and frame_index >= branch_search_after_frames
     if (
@@ -135,7 +139,8 @@ def choose_action(
         and target_color in target_search_actions
     ):
         return target_search_action(target_color, target_search_actions)
-    return heuristic_action(profile_view(record, target_color))
+    profile = profile_view(record, target_color)
+    return policy.choose_action(state_key(profile, previous_error), profile, epsilon=0.0)
 
 
 def build_summary(
@@ -184,6 +189,8 @@ def run_hardware_loop(
     if config.target_color not in TARGET_COLORS:
         raise ValueError(f"unsupported target color: {config.target_color}")
     target_actions = parse_target_search_actions(None) if target_search_actions is None else target_search_actions
+    policy = QPolicy(q_table_path())
+    policy.load()
     records: list[dict[str, object]] = []
     previous_error = 0.0
     lost_frames = 0
@@ -203,6 +210,7 @@ def run_hardware_loop(
                 break
 
             frame = frame_source.read_rgb_array()
+            state_previous_error = previous_error
             record, previous_error = analyzer(frame, config.target_color, previous_error)
             record["frame"] = frame_index + 1
             records.append(record)
@@ -244,6 +252,8 @@ def run_hardware_loop(
                     target_seen=target_seen,
                     target_search_actions=target_actions,
                     branch_search_after_frames=config.branch_search_after_frames,
+                    policy=policy,
+                    previous_error=state_previous_error,
                 )
                 command = action_to_command(action_index, safety_limits_from_env())
                 motor_sink.set_drive(command)

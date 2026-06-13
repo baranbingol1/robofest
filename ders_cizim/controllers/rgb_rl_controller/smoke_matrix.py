@@ -224,12 +224,23 @@ def find_default_webots() -> Path:
     raise FileNotFoundError("Webots executable was not found")
 
 
-def run_case(webots: Path, case: SmokeCase, *, extra_env: dict[str, str] | None = None) -> dict[str, object]:
+def run_case(
+    webots: Path,
+    case: SmokeCase,
+    *,
+    extra_env: dict[str, str] | None = None,
+    webots_mode: str = "fast",
+    minimize: bool = True,
+) -> dict[str, object]:
     env = env_for_case(case)
     if extra_env:
         env.update(extra_env)
+    command = [str(webots), f"--mode={webots_mode}", "--stdout", "--stderr"]
+    if minimize:
+        command.append("--minimize")
+    command.append(str(case.world_path.resolve()))
     completed = subprocess.run(
-        [str(webots), "--mode=fast", "--stdout", "--stderr", "--minimize", str(case.world_path.resolve())],
+        command,
         env=env,
         check=False,
         capture_output=True,
@@ -260,8 +271,14 @@ def run_case(webots: Path, case: SmokeCase, *, extra_env: dict[str, str] | None 
     }
 
 
-def run_cases(webots: Path, cases: Iterable[SmokeCase]) -> list[dict[str, object]]:
-    return [run_case(webots, case) for case in cases]
+def run_cases(
+    webots: Path,
+    cases: Iterable[SmokeCase],
+    *,
+    webots_mode: str = "fast",
+    minimize: bool = True,
+) -> list[dict[str, object]]:
+    return [run_case(webots, case, webots_mode=webots_mode, minimize=minimize) for case in cases]
 
 
 def main() -> None:
@@ -287,6 +304,8 @@ def main() -> None:
     parser.add_argument("--camera-noise", type=float, default=0.0)
     parser.add_argument("--out-dir", type=Path, default=Path("ders_cizim/artifacts/rgb_rl/variant_matrix"))
     parser.add_argument("--results-json", type=Path, default=None)
+    parser.add_argument("--webots-mode", choices=["fast", "realtime", "pause"], default="fast")
+    parser.add_argument("--visible", action="store_true", help="Open Webots visibly instead of minimized")
     parser.add_argument(
         "--camera-poses",
         nargs="*",
@@ -312,7 +331,7 @@ def main() -> None:
         mission_mode=args.mission_mode,
         color_sequence=args.sequence,
     )
-    results = run_cases(args.webots, cases)
+    results = run_cases(args.webots, cases, webots_mode=args.webots_mode, minimize=not args.visible)
     for result in results:
         case = result["case"]
         summary = result["summary"]

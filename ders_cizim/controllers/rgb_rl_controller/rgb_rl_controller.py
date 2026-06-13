@@ -20,7 +20,6 @@ try:
         action_to_speeds,
         clamp,
         compute_reward,
-        heuristic_action,
         parse_target_search_actions,
         target_search_action,
     )
@@ -55,7 +54,6 @@ except ImportError:  # Webots executes controllers from their own directory.
         action_to_speeds,
         clamp,
         compute_reward,
-        heuristic_action,
         parse_target_search_actions,
         target_search_action,
     )
@@ -420,15 +418,47 @@ class QPolicy:
         }
         self.path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
-    def values_for(self, key: str) -> list[float]:
+    def initial_values(self, profile: RgbProfile | object | None) -> list[float]:
+        if profile is None:
+            return [0.0 for _ in ACTION_TURNS]
+
+        visible = bool(getattr(profile, "visible", False))
+        center_error = clamp(float(getattr(profile, "center_error", 0.0)), -1.0, 1.0)
+        confidence = clamp(float(getattr(profile, "confidence", 0.0)), 0.0, 1.0)
+        line_width = clamp(float(getattr(profile, "line_width_ratio", 0.0)), 0.0, 1.0)
+        matched_target = bool(getattr(profile, "matched_target", False))
+        color_name = str(getattr(profile, "color_name", "none"))
+        target_color = str(getattr(profile, "target_color", "red"))
+
+        max_turn = max(abs(value) for value in ACTION_TURNS) or 1.0
+        desired_turn = clamp(center_error * (1.15 if visible else 0.85), -1.0, 1.0)
+        values: list[float] = []
+        for turn in ACTION_TURNS:
+            turn_ratio = turn / max_turn
+            alignment = 1.0 - abs(desired_turn - turn_ratio)
+            center_bonus = 0.35 * (1.0 - abs(center_error))
+            confidence_bonus = 0.25 * confidence
+            width_bonus = 0.20 * min(line_width / 0.16, 1.0)
+            turn_penalty = 0.08 * abs(turn)
+            if visible:
+                color_bonus = 0.25 if matched_target or color_name == target_color else 0.0
+                if color_name in TARGET_COLORS and color_name != target_color:
+                    color_bonus -= 0.35
+                value = alignment + center_bonus + confidence_bonus + width_bonus + color_bonus - turn_penalty
+            else:
+                value = -0.60 + alignment * 0.45 - turn_penalty
+            values.append(value)
+        return values
+
+    def values_for(self, key: str, profile: RgbProfile | object | None = None) -> list[float]:
         if key not in self.table:
-            self.table[key] = [0.0 for _ in ACTION_TURNS]
+            self.table[key] = self.initial_values(profile)
+        elif profile is not None and max(self.table[key]) == min(self.table[key]) == 0.0:
+            self.table[key] = self.initial_values(profile)
         return self.table[key]
 
     def best_action(self, key: str, profile: RgbProfile) -> int:
-        values = self.values_for(key)
-        if max(values) == min(values) == 0.0:
-            return heuristic_action(profile)
+        values = self.values_for(key, profile)
         best_value = max(values)
         best_indexes = [index for index, value in enumerate(values) if value == best_value]
         return random.choice(best_indexes)
@@ -438,9 +468,18 @@ class QPolicy:
             return random.randrange(len(ACTION_TURNS))
         return self.best_action(key, profile)
 
-    def update(self, key: str, action_index: int, reward: float, next_key: str, alpha: float, gamma: float) -> None:
+    def update(
+        self,
+        key: str,
+        action_index: int,
+        reward: float,
+        next_key: str,
+        alpha: float,
+        gamma: float,
+        next_profile: RgbProfile | object | None = None,
+    ) -> None:
         values = self.values_for(key)
-        next_values = self.values_for(next_key)
+        next_values = self.values_for(next_key, next_profile)
         old_value = values[action_index]
         values[action_index] = old_value + alpha * (reward + gamma * max(next_values) - old_value)
 
@@ -883,7 +922,7 @@ def main() -> None:
 
         if train_mode and previous_key is not None and previous_action is not None:
             reward = compute_reward(profile, previous_action)
-            policy.update(previous_key, previous_action, reward, key, alpha, gamma)
+            policy.update(previous_key, previous_action, reward, key, alpha, gamma, profile)
 
         if train_mode:
             progress = min(1.0, policy.training_steps / max(max_train_steps, 1))
