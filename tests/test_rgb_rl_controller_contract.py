@@ -34,6 +34,18 @@ class RgbRlControllerContractTests(unittest.TestCase):
         self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=False), "black")
         self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=True), "red")
 
+    def test_controller_args_can_set_black_target_and_goal_zone(self):
+        overrides = rgb_rl_controller.controller_arg_env_overrides(
+            [
+                "rgb_rl_controller.py",
+                "--target=black",
+                "--goal-zones=black=0.80:0.36:0.18",
+            ]
+        )
+
+        self.assertEqual(overrides["MONSTERBORG_RL_START_COLOR"], "black")
+        self.assertEqual(overrides["MONSTERBORG_RL_GOAL_ZONES"], "black=0.80:0.36:0.18")
+
     def test_speed_scaling_is_applied_before_motor_commands(self):
         old_left = rgb_rl_controller.LEFT_SPEED_SCALE
         old_right = rgb_rl_controller.RIGHT_SPEED_SCALE

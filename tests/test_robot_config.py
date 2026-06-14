@@ -17,6 +17,7 @@ from ders_cizim.controllers.rgb_rl_controller.robot_config import (
 
 ROOT = Path(__file__).resolve().parents[1]
 RGB_WORLD = ROOT / "ders_cizim" / "worlds" / "monsterborg_rgb_rl.wbt"
+PHOTO_SYMBOLIC_WORLD = ROOT / "ders_cizim" / "worlds" / "_generated_photo_symbolic_monsterborg_rgb_rl.wbt"
 
 
 def _parse_first_camera_block(world_text: str) -> dict[str, list[float]]:
@@ -76,6 +77,12 @@ class RobotConfigTests(unittest.TestCase):
         self.assertIn('name "lower_safety_rail"', world_text)
         self.assertIn("motionBlur 32", world_text)
         self.assertIn("noise 0.002", world_text)
+
+    def test_photo_symbolic_world_defaults_to_black_target(self):
+        world_text = PHOTO_SYMBOLIC_WORLD.read_text(encoding="utf-8")
+        self.assertIn('controllerArgs [', world_text)
+        self.assertIn('"--target=black"', world_text)
+        self.assertIn('"--goal-zones=black=0.80:0.36:0.18"', world_text)
 
     def test_safety_limits_keep_webots_and_hardware_scales_separate(self):
         self.assertGreater(DEFAULT_SAFETY_LIMITS.webots_max_speed, DEFAULT_SAFETY_LIMITS.webots_base_speed)
