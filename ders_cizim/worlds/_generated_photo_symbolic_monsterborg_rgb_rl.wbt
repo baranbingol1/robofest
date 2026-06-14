@@ -466,5 +466,9 @@ DEF MONSTERBORG_RL Robot {
     mass 1.5
   }
   controller "rgb_rl_controller"
+  controllerArgs [
+    "--target=black"
+    "--goal-zones=black=0.80:0.36:0.18"
+  ]
   supervisor TRUE
 }

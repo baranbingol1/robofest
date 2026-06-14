@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
@@ -144,6 +145,28 @@ def q_table_path(policy_layer: str | None = None, *, train_mode: bool = False) -
 def normalize_policy_layer(value: str | None) -> str:
     requested = (value or POLICY_LAYER_OPTION).strip().lower()
     return requested if requested in POLICY_LAYERS else POLICY_LAYER_OPTION
+
+
+def controller_arg_env_overrides(argv: Sequence[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for raw_arg in argv[1:]:
+        if not raw_arg.startswith("--") or "=" not in raw_arg:
+            continue
+        key, value = raw_arg[2:].split("=", 1)
+        key = key.strip().lower().replace("_", "-")
+        value = value.strip()
+        if not value:
+            continue
+        if key in {"target", "target-color", "start-color"}:
+            overrides["MONSTERBORG_RL_START_COLOR"] = value
+        elif key == "goal-zones":
+            overrides["MONSTERBORG_RL_GOAL_ZONES"] = value
+    return overrides
+
+
+def apply_controller_arg_defaults(argv: Sequence[str], environ: dict[str, str]) -> None:
+    for name, value in controller_arg_env_overrides(argv).items():
+        environ.setdefault(name, value)
 
 
 def read_pixel(camera_api, image: object, width: int, x: int, y: int) -> tuple[int, int, int]:
@@ -1009,6 +1032,8 @@ def main() -> None:
         from controller import Camera, Supervisor
     except ImportError:
         from controller import Camera, Robot as Supervisor
+
+    apply_controller_arg_defaults(sys.argv, os.environ)
 
     seed = env_int("MONSTERBORG_RL_SEED", 7)
     random.seed(seed)
