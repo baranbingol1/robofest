@@ -22,6 +22,8 @@ try:
         clamp,
         compute_reward,
         heuristic_action,
+        line_follow_command,
+        line_follower_gains_from_env,
         parse_target_search_actions,
         target_search_action,
     )
@@ -57,6 +59,8 @@ except ImportError:  # Webots executes controllers from their own directory.
         clamp,
         compute_reward,
         heuristic_action,
+        line_follow_command,
+        line_follower_gains_from_env,
         parse_target_search_actions,
         target_search_action,
     )
@@ -89,6 +93,7 @@ MAX_SPEED = SAFETY_LIMITS.webots_max_speed
 BASE_SPEED = SAFETY_LIMITS.webots_base_speed
 LEFT_SPEED_SCALE = 1.0
 RIGHT_SPEED_SCALE = 1.0
+LINE_FOLLOWER_GAINS = line_follower_gains_from_env({})
 
 COMMON_START_TRANSLATION = list(DEFAULT_START_TRANSLATION)
 COMMON_START_ROTATION = list(DEFAULT_START_ROTATION)
@@ -602,6 +607,32 @@ def option_to_action(
     return line_follow_action(profile), 1.0
 
 
+def option_to_command(
+    option_index: int,
+    profile: RgbProfile,
+    *,
+    previous_error: float,
+    target_search_actions: dict[str, str],
+    limits=SAFETY_LIMITS,
+) -> DifferentialDriveCommand:
+    option_name = OPTION_NAMES[option_index]
+    if option_name == "search_target":
+        action, speed_scale = option_to_action(option_index, profile, target_search_actions)
+        command = DifferentialDriveCommand(*action_to_speeds(action, limits))
+        return DifferentialDriveCommand(
+            command.left * speed_scale,
+            command.right * speed_scale,
+        ).clipped(limits.webots_max_speed)
+    speed_scale = 0.62 if option_name == "slow_follow" else 1.0
+    return line_follow_command(
+        profile,
+        previous_error,
+        limits,
+        gains=LINE_FOLLOWER_GAINS,
+        speed_scale=speed_scale,
+    )
+
+
 def option_stage_from_key(key: str) -> str:
     first, _, _ = key.partition("|")
     return first.removeprefix("stage") if first.startswith("stage") else "direct"
@@ -1027,6 +1058,7 @@ def pose_guided_return_command(
 
 def main() -> None:
     global SAFETY_LIMITS, DRIVE_REALISM, MAX_SPEED, BASE_SPEED, LEFT_SPEED_SCALE, RIGHT_SPEED_SCALE
+    global LINE_FOLLOWER_GAINS
 
     try:
         from controller import Camera, Supervisor
@@ -1044,6 +1076,7 @@ def main() -> None:
     BASE_SPEED = SAFETY_LIMITS.webots_base_speed
     LEFT_SPEED_SCALE = max(0.0, env_float("MONSTERBORG_RL_LEFT_SPEED_SCALE", 1.0))
     RIGHT_SPEED_SCALE = max(0.0, env_float("MONSTERBORG_RL_RIGHT_SPEED_SCALE", 1.0))
+    LINE_FOLLOWER_GAINS = line_follower_gains_from_env()
     mission_config = mission_config_from_env(os.environ)
 
     mode = os.getenv("MONSTERBORG_RL_MODE", "run").strip().lower()
@@ -1430,6 +1463,7 @@ def main() -> None:
         else:
             manual_drive_applied = False
             drive_speed_scale = 1.0
+            selected_command: DifferentialDriveCommand | None = None
             if sequence_progress is not None and sequence_progress.stage == "return_start":
                 action = ACTION_NAMES.index("straight")
                 action_name = "return_home"
@@ -1486,6 +1520,13 @@ def main() -> None:
                 )
                 policy_action_name = OPTION_NAMES[policy_action_index]
                 action, drive_speed_scale = option_to_action(policy_action_index, profile, target_search_actions)
+                selected_command = option_to_command(
+                    policy_action_index,
+                    profile,
+                    previous_error=previous_error,
+                    target_search_actions=target_search_actions,
+                    limits=SAFETY_LIMITS,
+                )
             elif should_search_target:
                 action = target_search_action(target_color, target_search_actions)
                 policy_action_index = action
@@ -1496,9 +1537,14 @@ def main() -> None:
                 policy_action_name = ACTION_NAMES[action]
             if not manual_drive_applied:
                 action_name = ACTION_NAMES[action]
-                left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
+                if selected_command is None:
+                    left_speed, right_speed = action_to_speeds(action, SAFETY_LIMITS)
+                    selected_command = DifferentialDriveCommand(
+                        left_speed * drive_speed_scale,
+                        right_speed * drive_speed_scale,
+                    )
                 delayed = delayed_drive_command(
-                    DifferentialDriveCommand(left_speed * drive_speed_scale, right_speed * drive_speed_scale),
+                    selected_command,
                     command_latency_queue,
                     DRIVE_REALISM,
                 )

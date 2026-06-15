@@ -7,6 +7,8 @@ from ders_cizim.controllers.rgb_rl_controller.control_core import (
     action_to_command,
     clamp,
     heuristic_action,
+    line_follow_command,
+    line_follower_gains_from_env,
     parse_target_search_actions,
     target_search_action,
 )
@@ -14,9 +16,10 @@ from ders_cizim.controllers.rgb_rl_controller.robot_config import DEFAULT_SAFETY
 
 
 class _Profile:
-    def __init__(self, visible=True, center_error=0.0):
+    def __init__(self, visible=True, center_error=0.0, confidence=1.0):
         self.visible = visible
         self.center_error = center_error
+        self.confidence = confidence
 
 
 class ControlCoreTests(unittest.TestCase):
@@ -47,6 +50,55 @@ class ControlCoreTests(unittest.TestCase):
         self.assertEqual(ACTION_NAMES[heuristic_action(_Profile(center_error=-0.7))], "hard_left")
         self.assertEqual(ACTION_NAMES[heuristic_action(_Profile(center_error=0.7))], "hard_right")
         self.assertEqual(ACTION_NAMES[heuristic_action(_Profile(center_error=0.0))], "straight")
+
+    def test_line_follow_command_uses_pd_error_feedback(self):
+        increasing_error = line_follow_command(
+            _Profile(center_error=0.20),
+            previous_error=0.05,
+            limits=DEFAULT_SAFETY_LIMITS,
+        )
+        steady_error = line_follow_command(
+            _Profile(center_error=0.20),
+            previous_error=0.20,
+            limits=DEFAULT_SAFETY_LIMITS,
+        )
+
+        self.assertLess(increasing_error.left, increasing_error.right)
+        self.assertLess(increasing_error.left, steady_error.left)
+        self.assertGreater(increasing_error.right, steady_error.right)
+
+    def test_line_follow_command_slows_when_requested(self):
+        command = line_follow_command(
+            _Profile(center_error=0.0),
+            previous_error=0.0,
+            limits=DEFAULT_SAFETY_LIMITS,
+            speed_scale=0.62,
+        )
+
+        self.assertAlmostEqual(command.left, DEFAULT_SAFETY_LIMITS.webots_base_speed * 0.62)
+        self.assertAlmostEqual(command.right, DEFAULT_SAFETY_LIMITS.webots_base_speed * 0.62)
+
+    def test_line_follower_gains_can_be_tuned_from_environment(self):
+        gains = line_follower_gains_from_env(
+            {
+                "MONSTERBORG_RL_LINE_KP": "2.25",
+                "MONSTERBORG_RL_LINE_KD": "0.30",
+            }
+        )
+
+        self.assertAlmostEqual(gains.kp, 2.25)
+        self.assertAlmostEqual(gains.kd, 0.30)
+
+    def test_line_follower_gains_reject_negative_environment_values(self):
+        gains = line_follower_gains_from_env(
+            {
+                "MONSTERBORG_RL_LINE_KP": "-1.0",
+                "MONSTERBORG_RL_LINE_KD": "-0.5",
+            }
+        )
+
+        self.assertGreaterEqual(gains.kp, 0.0)
+        self.assertGreaterEqual(gains.kd, 0.0)
 
     def test_target_search_action_uses_default_red_blue_branch_biases(self):
         self.assertEqual(ACTION_NAMES[target_search_action("red")], "straight")

@@ -135,6 +135,60 @@ class RgbRlControllerContractTests(unittest.TestCase):
         self.assertEqual(control_core.ACTION_NAMES[action], "left")
         self.assertLess(speed_scale, 1.0)
 
+    def test_option_follow_line_uses_pd_command_not_discrete_action_command(self):
+        profile = rgb_rl_controller.RgbProfile(
+            visible=True,
+            center_error=0.20,
+            confidence=1.0,
+            color_name="black",
+            target_color="red",
+            matched_target=False,
+            line_width_ratio=0.1,
+            rgb_balance=(10.0, 10.0, 10.0),
+            threshold=24.0,
+        )
+
+        command = rgb_rl_controller.option_to_command(
+            rgb_rl_controller.OPTION_FOLLOW_LINE,
+            profile,
+            previous_error=0.05,
+            target_search_actions={},
+            limits=DEFAULT_SAFETY_LIMITS,
+        )
+        discrete_action, _ = rgb_rl_controller.option_to_action(
+            rgb_rl_controller.OPTION_FOLLOW_LINE,
+            profile,
+            {},
+        )
+        discrete_command = control_core.action_to_command(discrete_action, DEFAULT_SAFETY_LIMITS)
+
+        self.assertLess(command.left, command.right)
+        self.assertNotEqual(command, discrete_command)
+
+    def test_option_slow_follow_reuses_pd_command_at_lower_speed(self):
+        profile = rgb_rl_controller.RgbProfile(
+            visible=True,
+            center_error=0.0,
+            confidence=0.4,
+            color_name="black",
+            target_color="red",
+            matched_target=False,
+            line_width_ratio=0.02,
+            rgb_balance=(10.0, 10.0, 10.0),
+            threshold=24.0,
+        )
+
+        command = rgb_rl_controller.option_to_command(
+            rgb_rl_controller.OPTION_SLOW_FOLLOW,
+            profile,
+            previous_error=0.0,
+            target_search_actions={},
+            limits=DEFAULT_SAFETY_LIMITS,
+        )
+
+        self.assertAlmostEqual(command.left, DEFAULT_SAFETY_LIMITS.webots_base_speed * 0.62)
+        self.assertAlmostEqual(command.right, DEFAULT_SAFETY_LIMITS.webots_base_speed * 0.62)
+
     def test_target_search_resumes_after_lock_when_wrong_branch_color_is_visible(self):
         profile = rgb_rl_controller.RgbProfile(
             visible=True,

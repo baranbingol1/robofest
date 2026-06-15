@@ -16,6 +16,8 @@ try:
         TARGET_COLORS,
         action_to_command,
         heuristic_action,
+        line_follow_command,
+        line_follower_gains_from_env,
         parse_target_search_actions,
         target_search_action,
     )
@@ -28,6 +30,8 @@ except ImportError:
         TARGET_COLORS,
         action_to_command,
         heuristic_action,
+        line_follow_command,
+        line_follower_gains_from_env,
         parse_target_search_actions,
         target_search_action,
     )
@@ -138,6 +142,36 @@ def choose_action(
     return heuristic_action(profile_view(record, target_color))
 
 
+def choose_command(
+    record: dict[str, object],
+    *,
+    target_color: str,
+    frame_index: int,
+    target_seen: bool,
+    target_search_actions: dict[str, str],
+    branch_search_after_frames: int,
+    previous_error: float,
+):
+    branch_gate_open = branch_search_after_frames > 0 and frame_index >= branch_search_after_frames
+    if (
+        branch_gate_open
+        and not target_seen
+        and not bool(record.get("matched_target"))
+        and target_color in target_search_actions
+    ):
+        action_index = target_search_action(target_color, target_search_actions)
+        return action_to_command(action_index, safety_limits_from_env()), ACTION_NAMES[action_index]
+    return (
+        line_follow_command(
+            profile_view(record, target_color),
+            previous_error,
+            safety_limits_from_env(),
+            gains=line_follower_gains_from_env(),
+        ),
+        "line_follow_pd",
+    )
+
+
 def build_summary(
     records: list[dict[str, object]],
     *,
@@ -203,7 +237,8 @@ def run_hardware_loop(
                 break
 
             frame = frame_source.read_rgb_array()
-            record, previous_error = analyzer(frame, config.target_color, previous_error)
+            previous_error_before_frame = previous_error
+            record, analyzed_error = analyzer(frame, config.target_color, previous_error)
             record["frame"] = frame_index + 1
             records.append(record)
 
@@ -224,6 +259,7 @@ def run_hardware_loop(
             if bool(record.get("visible")):
                 lost_frames = 0
             else:
+                previous_error = analyzed_error
                 lost_frames += 1
                 record["action"] = "line_lost_stop"
                 record["command_left"] = 0.0
@@ -237,24 +273,26 @@ def run_hardware_loop(
                 continue
 
             if warmed_up:
-                action_index = choose_action(
+                command, action_name = choose_command(
                     record,
                     target_color=config.target_color,
                     frame_index=frame_index + 1,
                     target_seen=target_seen,
                     target_search_actions=target_actions,
                     branch_search_after_frames=config.branch_search_after_frames,
+                    previous_error=previous_error_before_frame,
                 )
-                command = action_to_command(action_index, safety_limits_from_env())
                 motor_sink.set_drive(command)
                 commands_sent += 1
-                record["action"] = ACTION_NAMES[action_index]
+                record["action"] = action_name
                 record["command_left"] = command.left
                 record["command_right"] = command.right
             else:
                 record["action"] = "warmup_stop"
                 record["command_left"] = 0.0
                 record["command_right"] = 0.0
+
+            previous_error = analyzed_error
 
             if config.interval > 0:
                 sleeper(config.interval)
