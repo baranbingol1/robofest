@@ -8,6 +8,8 @@ from ders_cizim.controllers.rgb_rl_controller.hardware_runner import (
     camera_ready,
     run_hardware_loop,
 )
+from ders_cizim.controllers.rgb_rl_controller.control_core import line_follow_command
+from ders_cizim.controllers.rgb_rl_controller.robot_config import DEFAULT_SAFETY_LIMITS
 
 
 class FakeFrameSource:
@@ -121,6 +123,38 @@ class HardwareRunnerTests(unittest.TestCase):
         self.assertEqual(summary.stopped_reason, "lost_line")
         self.assertEqual(summary.commands_sent, 2)
         self.assertGreater(len(sink.commands), 1)
+
+    def test_hardware_loop_uses_shared_pd_line_follow_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            records = [
+                {"visible": True, "center_error": 0.0, "confidence": 0.9, "line_width_ratio": 0.12},
+                {"visible": True, "center_error": 0.2, "confidence": 0.9, "line_width_ratio": 0.12},
+            ]
+            source = FakeFrameSource([object(), object()])
+            sink = NullMotorSink()
+            config = HardwareRunConfig(
+                max_frames=2,
+                camera_ready_warmup_frames=1,
+                lost_stop_frames=3,
+                output_path=Path(tmp) / "run.json",
+            )
+            run_hardware_loop(
+                config,
+                source,
+                sink,
+                analyzer=analyzer_from_records(records),
+                sleeper=lambda _seconds: None,
+                clock=lambda: 0.0,
+            )
+
+        expected = line_follow_command(
+            type("Profile", (), {"visible": True, "center_error": 0.2, "confidence": 0.9})(),
+            previous_error=0.0,
+            limits=DEFAULT_SAFETY_LIMITS,
+        )
+        self.assertGreaterEqual(len(sink.commands), 2)
+        self.assertAlmostEqual(sink.commands[1].left, expected.left)
+        self.assertAlmostEqual(sink.commands[1].right, expected.right)
 
 
 if __name__ == "__main__":

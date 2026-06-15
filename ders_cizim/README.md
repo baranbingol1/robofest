@@ -284,13 +284,15 @@ The Pi path should use the same perception/control contract:
 1. Capture RGB frames with `hardware_pi.PiCameraFrameSource`.
 2. Wrap each frame with `vision_adapter.RgbArrayCamera`.
 3. Analyze it with `rgb_rl_controller.analyze_rgb_camera(..., RgbArrayCameraApi, target_color, previous_error)`.
-4. Convert policy actions with `control_core.action_to_command`.
+4. Convert visible line profiles with `control_core.line_follow_command`; branch search can still use `control_core.action_to_command`.
 5. Send clipped commands through `hardware_pi.TB6612GPIOMotorSink`.
 
 Start conservatively:
 
 ```powershell
 $env:MONSTERBORG_HARDWARE_OUTPUT_LIMIT='0.35'
+$env:MONSTERBORG_RL_LINE_KP='1.2'
+$env:MONSTERBORG_RL_LINE_KD='0.25'
 ```
 
 Laptop setup:

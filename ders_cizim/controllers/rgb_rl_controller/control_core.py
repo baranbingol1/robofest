@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import random
-from typing import Protocol
+from typing import Mapping, Protocol
 
 try:
     from .robot_config import DEFAULT_DRIVE_REALISM, DEFAULT_SAFETY_LIMITS, DriveRealism, SafetyLimits
@@ -54,8 +55,32 @@ class DifferentialDriveCommand:
         return DifferentialDriveCommand(clipped.left / max_abs, clipped.right / max_abs)
 
 
+@dataclass(frozen=True, slots=True)
+class LineFollowerGains:
+    kp: float = 1.8
+    kd: float = 0.45
+
+
+DEFAULT_LINE_FOLLOWER_GAINS = LineFollowerGains()
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, float(value)))
+
+
+def env_gain_float(source: Mapping[str, str], name: str, default: float) -> float:
+    try:
+        return max(0.0, float(source.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+def line_follower_gains_from_env(environ: Mapping[str, str] | None = None) -> LineFollowerGains:
+    source = os.environ if environ is None else environ
+    return LineFollowerGains(
+        kp=env_gain_float(source, "MONSTERBORG_RL_LINE_KP", DEFAULT_LINE_FOLLOWER_GAINS.kp),
+        kd=env_gain_float(source, "MONSTERBORG_RL_LINE_KD", DEFAULT_LINE_FOLLOWER_GAINS.kd),
+    )
 
 
 def action_to_command(
@@ -76,6 +101,27 @@ def action_to_speeds(
 ) -> tuple[float, float]:
     command = action_to_command(action_index, limits)
     return command.left, command.right
+
+
+def line_follow_command(
+    profile: LineProfileLike,
+    previous_error: float,
+    limits: SafetyLimits = DEFAULT_SAFETY_LIMITS,
+    *,
+    gains: LineFollowerGains = DEFAULT_LINE_FOLLOWER_GAINS,
+    speed_scale: float = 1.0,
+) -> DifferentialDriveCommand:
+    error = float(profile.center_error) if profile.visible else float(previous_error)
+    derivative = error - float(previous_error)
+    max_turn = max(abs(value) for value in ACTION_TURNS) or 1.0
+    turn = clamp(gains.kp * error + gains.kd * derivative, -max_turn, max_turn)
+    turn_ratio = abs(turn) / max_turn
+    scale = clamp(speed_scale, 0.0, 1.0)
+    if not profile.visible:
+        scale *= 0.45
+    base = limits.webots_base_speed * scale * (1.0 - 0.30 * turn_ratio)
+    command = DifferentialDriveCommand(left=base - turn, right=base + turn)
+    return command.clipped(limits.webots_max_speed)
 
 
 def apply_drive_realism(
