@@ -81,7 +81,8 @@ python -m unittest discover -s tests -v
 Capture one camera frame:
 
 ```powershell
-$env:MONSTERBORG_RL_CAPTURE_PATH='ders_cizim\artifacts\rgb_rl\camera_check.ppm'
+$repoRoot = (Get-Location).Path
+$env:MONSTERBORG_RL_CAPTURE_PATH=(Join-Path $repoRoot 'ders_cizim\artifacts\rgb_rl\camera_check.ppm')
 $env:MONSTERBORG_RL_CAPTURE_STEP='1'
 $env:MONSTERBORG_RL_QUIT_AFTER_CAPTURE='1'
 & 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\monsterborg_rgb_rl.wbt'
@@ -90,10 +91,11 @@ $env:MONSTERBORG_RL_QUIT_AFTER_CAPTURE='1'
 Run a mission smoke episode:
 
 ```powershell
+$repoRoot = (Get-Location).Path
 $env:MONSTERBORG_RL_START_COLOR='red'
 $env:MONSTERBORG_RL_MAX_STEPS='4600'
-$env:MONSTERBORG_RL_STEP_LOG_PATH='ders_cizim\artifacts\rgb_rl\run_red_4600.json'
-$env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_red_4600_summary.json'
+$env:MONSTERBORG_RL_STEP_LOG_PATH=(Join-Path $repoRoot 'ders_cizim\artifacts\rgb_rl\run_red_4600.json')
+$env:MONSTERBORG_RL_SUMMARY_PATH=(Join-Path $repoRoot 'ders_cizim\artifacts\rgb_rl\run_red_4600_summary.json')
 & 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\monsterborg_rgb_rl.wbt'
 ```
 
@@ -102,9 +104,10 @@ Change `MONSTERBORG_RL_START_COLOR` to `blue` to run the blue branch.
 The generated black symbolic world is a run-only validation case for following the black route without red/blue branch selection:
 
 ```powershell
+$repoRoot = (Get-Location).Path
 $env:MONSTERBORG_RL_MAX_STEPS='4600'
-$env:MONSTERBORG_RL_STEP_LOG_PATH='ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600.json'
-$env:MONSTERBORG_RL_SUMMARY_PATH='ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600_summary.json'
+$env:MONSTERBORG_RL_STEP_LOG_PATH=(Join-Path $repoRoot 'ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600.json')
+$env:MONSTERBORG_RL_SUMMARY_PATH=(Join-Path $repoRoot 'ders_cizim\artifacts\rgb_rl\run_black_symbolic_4600_summary.json')
 & 'C:\Program Files\Webots\msys64\mingw64\bin\webots.exe' --mode=fast --stdout --stderr --minimize 'ders_cizim\worlds\_generated_photo_symbolic_monsterborg_rgb_rl.wbt'
 ```
 
