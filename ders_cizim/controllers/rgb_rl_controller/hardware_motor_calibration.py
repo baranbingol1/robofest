@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 try:
     from .control_core import DifferentialDriveCommand, clamp
-    from .hardware_pi import NullMotorSink, TB6612GPIOMotorSink
+    from .hardware_pi import NullMotorSink, TB6612GPIOMotorSink, tb6612_motor_signs_from_values
 except ImportError:
     from control_core import DifferentialDriveCommand, clamp
-    from hardware_pi import NullMotorSink, TB6612GPIOMotorSink
+    from hardware_pi import NullMotorSink, TB6612GPIOMotorSink, tb6612_motor_signs_from_values
 
 
 MAX_CALIBRATION_POWER = 0.25
@@ -55,11 +55,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--power", type=float, default=0.12)
     parser.add_argument("--pulse-seconds", type=float, default=0.35)
+    parser.add_argument("--right-rear-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--right-front-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--left-front-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--left-rear-sign", type=int, choices=[-1, 1], default=1)
     parser.add_argument("--armed", action="store_true", help="Actually command TB6612 GPIO motors")
     args = parser.parse_args()
 
     sequence = build_calibration_sequence(power=args.power, pulse_seconds=args.pulse_seconds)
-    sink = TB6612GPIOMotorSink() if args.armed else NullMotorSink()
+    motor_signs = tb6612_motor_signs_from_values(
+        right_rear=args.right_rear_sign,
+        right_front=args.right_front_sign,
+        left_front=args.left_front_sign,
+        left_rear=args.left_rear_sign,
+    )
+    sink = TB6612GPIOMotorSink(motor_signs=motor_signs) if args.armed else NullMotorSink()
     try:
         run_calibration_sequence(sink, sequence)
     finally:

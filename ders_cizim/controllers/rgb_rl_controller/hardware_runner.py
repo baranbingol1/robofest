@@ -21,8 +21,14 @@ try:
         parse_target_search_actions,
         target_search_action,
     )
-    from .hardware_pi import NullMotorSink, PiCameraFrameSource, TB6612GPIOMotorSink
-    from .hardware_probe import analyze_frame, summarize_profile_records
+    from .hardware_pi import (
+        NullMotorSink,
+        PiCameraFrameSource,
+        TB6612GPIOMotorSink,
+        V4L2FrameSource,
+        tb6612_motor_signs_from_values,
+    )
+    from .hardware_probe import analyze_frame, default_min_line_width_ratio, summarize_profile_records
     from .robot_config import safety_limits_from_env
 except ImportError:
     from control_core import (
@@ -35,8 +41,14 @@ except ImportError:
         parse_target_search_actions,
         target_search_action,
     )
-    from hardware_pi import NullMotorSink, PiCameraFrameSource, TB6612GPIOMotorSink
-    from hardware_probe import analyze_frame, summarize_profile_records
+    from hardware_pi import (
+        NullMotorSink,
+        PiCameraFrameSource,
+        TB6612GPIOMotorSink,
+        V4L2FrameSource,
+        tb6612_motor_signs_from_values,
+    )
+    from hardware_probe import analyze_frame, default_min_line_width_ratio, summarize_profile_records
     from robot_config import safety_limits_from_env
 
 
@@ -57,6 +69,7 @@ class MotorSink(Protocol):
 
 
 Analyzer = Callable[[object, str, float], tuple[dict[str, object], float]]
+HARDWARE_CAMERA_TARGETS = (*TARGET_COLORS, "black")
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +228,7 @@ def run_hardware_loop(
     clock: Callable[[], float] = time.monotonic,
     target_search_actions: dict[str, str] | None = None,
 ) -> HardwareRunSummary:
-    if config.target_color not in TARGET_COLORS:
+    if config.target_color not in HARDWARE_CAMERA_TARGETS:
         raise ValueError(f"unsupported target color: {config.target_color}")
     target_actions = parse_target_search_actions(None) if target_search_actions is None else target_search_actions
     records: list[dict[str, object]] = []
@@ -326,18 +339,31 @@ def load_image(path: Path):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", default="red", choices=list(TARGET_COLORS))
+    parser.add_argument("--target", default="red", choices=list(HARDWARE_CAMERA_TARGETS))
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--max-seconds", type=float, default=20.0)
     parser.add_argument("--interval", type=float, default=0.05)
     parser.add_argument("--image", type=Path, default=None, help="Replay one saved image instead of using Pi camera")
+    parser.add_argument("--camera-backend", default="picamera2", choices=["picamera2", "v4l2"])
+    parser.add_argument("--camera-width", type=int, default=96)
+    parser.add_argument("--camera-height", type=int, default=96)
+    parser.add_argument("--video-device", default="/dev/video0")
+    parser.add_argument("--v4l2-input-width", type=int, default=640)
+    parser.add_argument("--v4l2-input-height", type=int, default=480)
+    parser.add_argument("--v4l2-framerate", type=int, default=30)
     parser.add_argument("--output", type=Path, default=Path("hardware_run.json"))
     parser.add_argument("--stop-file", type=Path, default=None)
     parser.add_argument("--lost-stop-frames", type=int, default=8)
     parser.add_argument("--branch-search-after-frames", type=int, default=0)
     parser.add_argument("--camera-ready-warmup-frames", type=int, default=20)
+    parser.add_argument("--min-line-width-ratio", type=float, default=None)
+    parser.add_argument("--max-line-width-ratio", type=float, default=0.25)
     parser.add_argument("--allow-uncalibrated-camera", action="store_true")
     parser.add_argument("--hardware-output-limit", type=float, default=None)
+    parser.add_argument("--right-rear-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--right-front-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--left-front-sign", type=int, choices=[-1, 1], default=1)
+    parser.add_argument("--left-rear-sign", type=int, choices=[-1, 1], default=1)
     parser.add_argument("--armed", action="store_true", help="Actually command TB6612 GPIO motors")
     args = parser.parse_args()
 
@@ -353,15 +379,36 @@ def main() -> None:
         lost_stop_frames=args.lost_stop_frames,
         branch_search_after_frames=args.branch_search_after_frames,
         camera_ready_warmup_frames=args.camera_ready_warmup_frames,
+        min_line_width_ratio=(
+            default_min_line_width_ratio(args.target)
+            if args.min_line_width_ratio is None
+            else max(0.0, args.min_line_width_ratio)
+        ),
+        max_line_width_ratio=max(0.0, args.max_line_width_ratio),
         require_camera_ready=not args.allow_uncalibrated_camera,
         stop_file=args.stop_file,
         output_path=args.output,
     )
     if args.image is not None:
         frame_source = StaticImageFrameSource(load_image(args.image))
+    elif args.camera_backend == "v4l2":
+        frame_source = V4L2FrameSource(
+            device=args.video_device,
+            width=args.camera_width,
+            height=args.camera_height,
+            input_width=args.v4l2_input_width,
+            input_height=args.v4l2_input_height,
+            framerate=args.v4l2_framerate,
+        )
     else:
-        frame_source = PiCameraFrameSource()
-    motor_sink = TB6612GPIOMotorSink(limits) if args.armed else NullMotorSink()
+        frame_source = PiCameraFrameSource(width=args.camera_width, height=args.camera_height)
+    motor_signs = tb6612_motor_signs_from_values(
+        right_rear=args.right_rear_sign,
+        right_front=args.right_front_sign,
+        left_front=args.left_front_sign,
+        left_rear=args.left_rear_sign,
+    )
+    motor_sink = TB6612GPIOMotorSink(limits, motor_signs=motor_signs) if args.armed else NullMotorSink()
     summary = run_hardware_loop(config, frame_source, motor_sink)
     print(json.dumps(asdict(summary), sort_keys=True))
 

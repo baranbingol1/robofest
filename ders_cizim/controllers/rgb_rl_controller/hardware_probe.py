@@ -9,13 +9,22 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from .hardware_pi import PiCameraFrameSource
+    from .hardware_pi import PiCameraFrameSource, V4L2FrameSource
     from .rgb_rl_controller import analyze_rgb_camera
     from .vision_adapter import RgbArrayCamera, RgbArrayCameraApi
 except ImportError:  # Allows direct execution from the controller directory.
-    from hardware_pi import PiCameraFrameSource
+    from hardware_pi import PiCameraFrameSource, V4L2FrameSource
     from rgb_rl_controller import analyze_rgb_camera
     from vision_adapter import RgbArrayCamera, RgbArrayCameraApi
+
+HARDWARE_CAMERA_TARGETS = ("red", "blue", "black")
+DEFAULT_MIN_LINE_WIDTH_RATIO = 0.08
+DEFAULT_BLACK_MIN_LINE_WIDTH_RATIO = 0.05
+DEFAULT_MAX_LINE_WIDTH_RATIO = 0.25
+
+
+def default_min_line_width_ratio(target_color: str) -> float:
+    return DEFAULT_BLACK_MIN_LINE_WIDTH_RATIO if target_color == "black" else DEFAULT_MIN_LINE_WIDTH_RATIO
 
 
 def profile_to_record(profile) -> dict[str, object]:
@@ -32,7 +41,12 @@ def profile_to_record(profile) -> dict[str, object]:
     }
 
 
-def summarize_profile_records(records: Iterable[dict[str, object]]) -> dict[str, object]:
+def summarize_profile_records(
+    records: Iterable[dict[str, object]],
+    *,
+    min_line_width_ratio: float = DEFAULT_MIN_LINE_WIDTH_RATIO,
+    max_line_width_ratio: float = DEFAULT_MAX_LINE_WIDTH_RATIO,
+) -> dict[str, object]:
     rows = list(records)
     if not rows:
         return {
@@ -52,8 +66,8 @@ def summarize_profile_records(records: Iterable[dict[str, object]]) -> dict[str,
     camera_ready = (
         visible_ratio >= 0.90
         and mean_confidence >= 0.70
-        and min_width >= 0.08
-        and max_width <= 0.25
+        and min_width >= min_line_width_ratio
+        and max_width <= max_line_width_ratio
     )
     return {
         "frames": len(rows),
@@ -83,10 +97,19 @@ def load_image(path: Path):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", default="red", choices=["red", "blue"])
+    parser.add_argument("--target", default="red", choices=HARDWARE_CAMERA_TARGETS)
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--interval", type=float, default=0.05)
     parser.add_argument("--image", type=Path, default=None, help="Replay one saved RGB image instead of using Pi camera")
+    parser.add_argument("--camera-backend", default="picamera2", choices=["picamera2", "v4l2"])
+    parser.add_argument("--camera-width", type=int, default=96)
+    parser.add_argument("--camera-height", type=int, default=96)
+    parser.add_argument("--video-device", default="/dev/video0")
+    parser.add_argument("--v4l2-input-width", type=int, default=640)
+    parser.add_argument("--v4l2-input-height", type=int, default=480)
+    parser.add_argument("--v4l2-framerate", type=int, default=30)
+    parser.add_argument("--min-line-width-ratio", type=float, default=None)
+    parser.add_argument("--max-line-width-ratio", type=float, default=DEFAULT_MAX_LINE_WIDTH_RATIO)
     parser.add_argument("--output", type=Path, default=Path("hardware_probe.json"))
     args = parser.parse_args()
 
@@ -99,8 +122,22 @@ def main() -> None:
             for _ in range(args.frames):
                 record, previous_error = analyze_frame(frame, args.target, previous_error)
                 records.append(record)
+        elif args.camera_backend == "v4l2":
+            source = V4L2FrameSource(
+                device=args.video_device,
+                width=args.camera_width,
+                height=args.camera_height,
+                input_width=args.v4l2_input_width,
+                input_height=args.v4l2_input_height,
+                framerate=args.v4l2_framerate,
+            )
+            for _ in range(args.frames):
+                frame = source.read_rgb_array()
+                record, previous_error = analyze_frame(frame, args.target, previous_error)
+                records.append(record)
+                time.sleep(args.interval)
         else:
-            source = PiCameraFrameSource()
+            source = PiCameraFrameSource(width=args.camera_width, height=args.camera_height)
             for _ in range(args.frames):
                 frame = source.read_rgb_array()
                 record, previous_error = analyze_frame(frame, args.target, previous_error)
@@ -112,7 +149,15 @@ def main() -> None:
 
     payload = {
         "target": args.target,
-        "summary": summarize_profile_records(records),
+        "summary": summarize_profile_records(
+            records,
+            min_line_width_ratio=(
+                default_min_line_width_ratio(args.target)
+                if args.min_line_width_ratio is None
+                else max(0.0, args.min_line_width_ratio)
+            ),
+            max_line_width_ratio=max(0.0, args.max_line_width_ratio),
+        ),
         "records": records,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

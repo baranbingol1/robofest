@@ -26,6 +26,15 @@ class HardwareProbeTests(unittest.TestCase):
         summary = summarize_profile_records(records)
         self.assertTrue(summary["camera_ready"])
 
+    def test_summarize_profile_records_can_accept_thin_physical_black_line(self):
+        records = [
+            {"visible": True, "line_width_ratio": 0.055, "confidence": 1.0},
+            {"visible": True, "line_width_ratio": 0.060, "confidence": 1.0},
+            {"visible": True, "line_width_ratio": 0.061, "confidence": 1.0},
+        ]
+        summary = summarize_profile_records(records, min_line_width_ratio=0.05)
+        self.assertTrue(summary["camera_ready"])
+
 
 if __name__ == "__main__":
     unittest.main()

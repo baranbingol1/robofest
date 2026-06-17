@@ -156,6 +156,47 @@ class HardwareRunnerTests(unittest.TestCase):
         self.assertAlmostEqual(sink.commands[1].left, expected.left)
         self.assertAlmostEqual(sink.commands[1].right, expected.right)
 
+    def test_hardware_loop_accepts_black_target_for_physical_line_following(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            records = [
+                {
+                    "visible": True,
+                    "center_error": 0.0,
+                    "confidence": 0.9,
+                    "line_width_ratio": 0.12,
+                    "color_name": "black",
+                    "matched_target": True,
+                },
+                {
+                    "visible": True,
+                    "center_error": -0.1,
+                    "confidence": 0.9,
+                    "line_width_ratio": 0.12,
+                    "color_name": "black",
+                    "matched_target": True,
+                },
+            ]
+            source = FakeFrameSource([object(), object()])
+            sink = NullMotorSink()
+            config = HardwareRunConfig(
+                target_color="black",
+                max_frames=2,
+                camera_ready_warmup_frames=1,
+                output_path=Path(tmp) / "run.json",
+            )
+            summary = run_hardware_loop(
+                config,
+                source,
+                sink,
+                analyzer=analyzer_from_records(records),
+                sleeper=lambda _seconds: None,
+                clock=lambda: 0.0,
+            )
+
+        self.assertEqual(summary.target_color, "black")
+        self.assertEqual(summary.commands_sent, 2)
+        self.assertTrue(summary.target_seen)
+
 
 if __name__ == "__main__":
     unittest.main()

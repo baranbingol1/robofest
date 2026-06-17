@@ -318,6 +318,15 @@ python -m unittest discover -s tests -v
 
 Raspberry Pi setup should also install the OS-provided camera stack and an `RPi.GPIO`-compatible GPIO library. The project package intentionally keeps those hardware libraries lazy so laptop tests can run without them.
 
+For a Raspberry Pi CSI camera, `rpicam-hello --list-cameras` should show the camera and the default `picamera2` backend can be used. For a USB webcam, `rpicam-hello` may still print `No cameras available`; check the V4L2 path instead:
+
+```bash
+v4l2-ctl --list-devices
+ffmpeg -f v4l2 -video_size 640x480 -i /dev/video0 -frames:v 1 /tmp/usb_camera_test.jpg -y
+```
+
+USB cameras should use `--camera-backend v4l2 --video-device /dev/video0`. The V4L2 backend uses a persistent FFmpeg pipe, so the Pi should have `ffmpeg` and `v4l-utils` installed.
+
 The TB6612 code uses BCM GPIO numbers, matching this wiring:
 
 | Motor | Driver channel | PWM GPIO | IN1 GPIO | IN2 GPIO | STBY GPIO |
@@ -344,6 +353,17 @@ python -m ders_cizim.controllers.rgb_rl_controller.hardware_probe `
   --target red `
   --frames 60 `
   --output hardware_probe_red.json
+```
+
+For a USB webcam:
+
+```bash
+python -m ders_cizim.controllers.rgb_rl_controller.hardware_probe \
+  --target black \
+  --frames 60 \
+  --camera-backend v4l2 \
+  --video-device /dev/video0 \
+  --output hardware_probe_black.json
 ```
 
 Replay a saved image on the laptop:
@@ -381,26 +401,28 @@ Run the physical closed-loop controller only after the probe and motor-sign cali
 
 ```powershell
 python -m ders_cizim.controllers.rgb_rl_controller.hardware_runner `
-  --target red `
+  --target black `
   --frames 400 `
   --max-seconds 20 `
-  --hardware-output-limit 0.30 `
-  --branch-search-after-frames 80 `
+  --camera-backend v4l2 `
+  --video-device /dev/video0 `
+  --hardware-output-limit 0.20 `
   --stop-file stop_robot.txt `
-  --output hardware_run_red.json
+  --output hardware_run_black.json
 ```
 
 When the robot is on the floor, the camera is ready, and someone is next to it with a manual stop path, add `--armed`:
 
 ```powershell
 python -m ders_cizim.controllers.rgb_rl_controller.hardware_runner `
-  --target red `
+  --target black `
   --frames 400 `
   --max-seconds 20 `
-  --hardware-output-limit 0.30 `
-  --branch-search-after-frames 80 `
+  --camera-backend v4l2 `
+  --video-device /dev/video0 `
+  --hardware-output-limit 0.20 `
   --stop-file stop_robot.txt `
-  --output hardware_run_red.json `
+  --output hardware_run_black.json `
   --armed
 ```
 
