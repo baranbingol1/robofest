@@ -1,3 +1,4 @@
+import io
 import unittest
 
 from ders_cizim.controllers.rgb_rl_controller import hardware_pi
@@ -120,6 +121,80 @@ class HardwarePiTests(unittest.TestCase):
         self.assertEqual(gpio.output_states[24], gpio.HIGH)
         self.assertEqual(gpio.output_states[25], gpio.HIGH)
         self.assertEqual(gpio.output_states[26], gpio.LOW)
+
+    def test_motor_signs_can_be_built_from_cli_values(self):
+        signs = hardware_pi.tb6612_motor_signs_from_values(
+            right_rear=-1,
+            right_front=1,
+            left_front="-1",
+            left_rear="bad",
+        )
+
+        self.assertEqual(signs.right_rear, -1)
+        self.assertEqual(signs.right_front, 1)
+        self.assertEqual(signs.left_front, -1)
+        self.assertEqual(signs.left_rear, 1)
+
+    def test_right_rear_motor_sign_can_be_reversed_without_reversing_right_front(self):
+        gpio = FakeGPIO()
+        signs = hardware_pi.TB6612MotorSigns(right_rear=-1)
+        sink = hardware_pi.TB6612GPIOMotorSink(gpio=gpio, motor_signs=signs)
+
+        sink.set_drive(DifferentialDriveCommand(left=0.0, right=1.0))
+
+        self.assertEqual(gpio.output_states[5], gpio.LOW)
+        self.assertEqual(gpio.output_states[6], gpio.HIGH)
+        self.assertEqual(gpio.output_states[16], gpio.HIGH)
+        self.assertEqual(gpio.output_states[20], gpio.LOW)
+
+    def test_v4l2_frame_source_reads_rgb_frame_from_ffmpeg_pipe(self):
+        captured = {}
+        raw_frame = bytes(
+            [
+                255,
+                0,
+                0,
+                0,
+                255,
+                0,
+            ]
+        )
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = io.BytesIO(raw_frame)
+                self.stderr = io.BytesIO(b"")
+
+            def poll(self):
+                return 0
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return FakeProc()
+
+        source = hardware_pi.V4L2FrameSource(
+            device="/dev/video-test",
+            width=2,
+            height=1,
+            input_width=640,
+            input_height=480,
+            framerate=15,
+            ffmpeg="fake-ffmpeg",
+            popen_factory=fake_popen,
+        )
+
+        frame = source.read_rgb_array()
+        source.close()
+
+        self.assertEqual(frame.size, (2, 1))
+        self.assertEqual(frame.getpixel((0, 0)), (255, 0, 0))
+        self.assertEqual(frame.getpixel((1, 0)), (0, 255, 0))
+        self.assertEqual(captured["cmd"][0], "fake-ffmpeg")
+        self.assertIn("/dev/video-test", captured["cmd"])
+        self.assertIn("640x480", captured["cmd"])
+        self.assertIn("scale=2:1", captured["cmd"])
+        self.assertEqual(captured["kwargs"]["stdout"], hardware_pi.subprocess.PIPE)
 
 
 if __name__ == "__main__":

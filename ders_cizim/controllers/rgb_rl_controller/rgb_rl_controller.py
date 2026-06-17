@@ -421,6 +421,7 @@ def analyze_rgb_camera(
     line_width_ratio = sum(segment[4] for segment in selected) / max(width * len(samples_by_row), 1)
     confidence = clamp(line_width_ratio * 14.0 + min(1.0, weight_sum / 1200.0), 0.0, 1.0)
     visible = confidence >= 0.10
+    final_matched_target = source_matched_target or (target_color == "black" and color_name == "black")
 
     return RgbProfile(
         visible=visible,
@@ -428,7 +429,7 @@ def analyze_rgb_camera(
         confidence=confidence,
         color_name=color_name if visible else "none",
         target_color=target_color,
-        matched_target=source_matched_target,
+        matched_target=final_matched_target if visible else False,
         line_width_ratio=line_width_ratio,
         rgb_balance=(avg_red, avg_green, avg_blue),
         threshold=threshold,

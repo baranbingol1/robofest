@@ -6,6 +6,7 @@ from ders_cizim.controllers.rgb_rl_controller import control_core
 from ders_cizim.controllers.rgb_rl_controller import rgb_rl_controller
 from ders_cizim.controllers.rgb_rl_controller.control_core import DifferentialDriveCommand
 from ders_cizim.controllers.rgb_rl_controller.robot_config import DEFAULT_SAFETY_LIMITS, DriveRealism
+from ders_cizim.controllers.rgb_rl_controller.vision_adapter import RgbArrayCamera, RgbArrayCameraApi
 
 
 class FakeMotor:
@@ -33,6 +34,25 @@ class RgbRlControllerContractTests(unittest.TestCase):
     def test_black_target_is_run_only(self):
         self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=False), "black")
         self.assertEqual(rgb_rl_controller.normalize_target_color("black", train_mode=True), "red")
+
+    def test_black_camera_target_matches_thin_black_line(self):
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGB", (96, 96), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((43, 0, 48, 70), fill=(20, 20, 20))
+
+        profile = rgb_rl_controller.analyze_rgb_camera(
+            RgbArrayCamera(image),
+            RgbArrayCameraApi,
+            "black",
+            previous_error=0.0,
+        )
+
+        self.assertTrue(profile.visible)
+        self.assertEqual(profile.color_name, "black")
+        self.assertTrue(profile.matched_target)
+        self.assertGreater(profile.line_width_ratio, 0.0)
 
     def test_controller_args_can_set_black_target_and_goal_zone(self):
         overrides = rgb_rl_controller.controller_arg_env_overrides(

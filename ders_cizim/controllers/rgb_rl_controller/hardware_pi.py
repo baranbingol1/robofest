@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -72,6 +73,29 @@ DEFAULT_TB6612_PINOUT = TB6612Pinout(
 
 
 DEFAULT_TB6612_MOTOR_SIGNS = TB6612MotorSigns()
+
+
+def motor_sign(value: int | float | str | None) -> int:
+    try:
+        numeric = float(value) if value is not None else 1.0
+    except (TypeError, ValueError):
+        return 1
+    return -1 if numeric < 0 else 1
+
+
+def tb6612_motor_signs_from_values(
+    *,
+    right_rear: int | float | str | None = None,
+    right_front: int | float | str | None = None,
+    left_front: int | float | str | None = None,
+    left_rear: int | float | str | None = None,
+) -> TB6612MotorSigns:
+    return TB6612MotorSigns(
+        right_rear=motor_sign(1 if right_rear is None else right_rear),
+        right_front=motor_sign(1 if right_front is None else right_front),
+        left_front=motor_sign(1 if left_front is None else left_front),
+        left_rear=motor_sign(1 if left_rear is None else left_rear),
+    )
 
 
 def _signed(value: float, sign: int) -> float:
@@ -227,3 +251,91 @@ class PiCameraFrameSource:
 
     def close(self) -> None:
         self.camera.stop()
+
+
+class V4L2FrameSource:
+    """USB/V4L2 camera frame source using a persistent FFmpeg raw RGB pipe."""
+
+    def __init__(
+        self,
+        device: str = "/dev/video0",
+        width: int = 96,
+        height: int = 96,
+        input_width: int = 640,
+        input_height: int = 480,
+        framerate: int = 30,
+        *,
+        ffmpeg: str = "ffmpeg",
+        popen_factory: Any = subprocess.Popen,
+    ) -> None:
+        self.device = device
+        self.width = int(width)
+        self.height = int(height)
+        self.frame_size = self.width * self.height * 3
+        self._image_cls = self._load_image_class()
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-f",
+            "v4l2",
+            "-framerate",
+            str(int(framerate)),
+            "-video_size",
+            f"{int(input_width)}x{int(input_height)}",
+            "-i",
+            device,
+            "-vf",
+            f"scale={self.width}:{self.height}",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ]
+        self._proc = popen_factory(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=self.frame_size * 2,
+        )
+        if self._proc.stdout is None:
+            raise RuntimeError("ffmpeg did not expose a stdout pipe")
+
+    @staticmethod
+    def _load_image_class():
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("Pillow is required for V4L2 camera frames.") from exc
+        return Image
+
+    def read_rgb_array(self):
+        raw = self._proc.stdout.read(self.frame_size)
+        if len(raw) != self.frame_size:
+            detail = ""
+            stderr = getattr(self._proc, "stderr", None)
+            if stderr is not None:
+                try:
+                    detail = stderr.read().decode("utf-8", errors="replace").strip()
+                except Exception:
+                    detail = ""
+            raise RuntimeError(
+                f"failed to read RGB frame from {self.device}"
+                + (f": {detail}" if detail else "")
+            )
+        return self._image_cls.frombytes("RGB", (self.width, self.height), raw)
+
+    def close(self) -> None:
+        stdout = getattr(self._proc, "stdout", None)
+        if stdout is not None:
+            stdout.close()
+        if self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=2.0)
